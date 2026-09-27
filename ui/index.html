@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sessions</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header>
+  <div>
+    <h1>Sessions</h1>
+    <p id="lead">Find a session, then import, export, index, recover, or resume it.</p>
+  </div>
+  <button type="button" id="index">Build index</button>
+</header>
+<section class="filters">
+  <input id="q" type="search" placeholder="Search title, id, or folder" aria-label="Search">
+  <div id="harness" class="chips" role="group" aria-label="Harness"></div>
+</section>
+<main>
+  <section class="list-wrap">
+    <div class="list-head">
+      <span id="count">Loading recent sessions…</span>
+    </div>
+    <ul id="list"></ul>
+  </section>
+  <section class="detail" id="detail">
+    <h2 id="d-title">No session selected</h2>
+    <p id="d-meta" class="muted">Choose one from the list. Legal sessions stay closed.</p>
+    <p id="d-cmd" class="cmd" hidden></p>
+    <div class="actions">
+      <button type="button" id="resume" disabled>Show resume</button>
+      <button type="button" id="launch" disabled>Launch</button>
+      <button type="button" id="import" disabled>Import</button>
+      <button type="button" id="export" disabled>Export</button>
+      <button type="button" id="recover" disabled>Check recovery</button>
+    </div>
+    <p id="say" class="say">Legal text is never opened. Launch is the only button that starts a harness.</p>
+    <details>
+      <summary>Record</summary>
+      <pre id="out"></pre>
+    </details>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
