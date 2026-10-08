@@ -7,15 +7,55 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
+<div class="app">
+<nav class="rail" aria-label="Sections">
+  <button type="button" id="nav-overview" class="nav on">
+    <span class="mark mark-drives" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+    </span>
+    <span class="nav-copy">
+      <strong>Overview</strong>
+      <span class="hint">Drives and locations</span>
+    </span>
+  </button>
+  <button type="button" id="nav-sessions" class="nav">
+    <span class="mark mark-sessions" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M5 7h14M5 12h14M5 17h9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+    </span>
+    <span class="nav-copy">
+      <strong>Sessions</strong>
+      <span class="hint">Search, resume, recover</span>
+    </span>
+  </button>
+</nav>
+<div class="stage">
 <header>
   <div>
     <h1>Sessions</h1>
-    <p id="lead">Find a session, then import, export, index, recover, or resume it.</p>
+    <p id="lead">Scanning drives and default locations…</p>
   </div>
-  <button type="button" id="index">Build index</button>
+  <div class="header-actions">
+    <button type="button" id="refresh" class="icon-btn" aria-label="Refresh">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M20 4v6h-6" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+    </button>
+    <button type="button" id="index">Build index</button>
+    <button type="button" id="quit">Quit</button>
+  </div>
 </header>
+<section id="overview">
+  <h2>Drives</h2>
+  <div id="drive-grid" class="icon-grid"></div>
+  <h2>Default locations</h2>
+  <div id="place-grid" class="icon-grid"></div>
+  <details id="absent-wrap">
+    <summary id="absent-sum">Not on this machine</summary>
+    <div id="absent-grid" class="icon-grid"></div>
+  </details>
+</section>
+<section id="sessions" hidden>
 <section class="filters">
   <input id="q" type="search" placeholder="Search title, id, or folder" aria-label="Search">
+  <div id="scope" class="chips" aria-label="Active filters"></div>
   <div id="harness" class="chips" role="group" aria-label="Harness"></div>
 </section>
 <main>
@@ -29,12 +69,17 @@
     <h2 id="d-title">No session selected</h2>
     <p id="d-meta" class="muted">Choose one from the list. Legal sessions stay closed.</p>
     <p id="d-cmd" class="cmd" hidden></p>
+    <pre id="preview" class="preview">Select a session to preview it. Legal sessions stay closed.</pre>
     <div class="actions">
       <button type="button" id="resume" disabled>Show resume</button>
       <button type="button" id="launch" disabled>Launch</button>
       <button type="button" id="import" disabled>Import</button>
       <button type="button" id="export" disabled>Export</button>
       <button type="button" id="recover" disabled>Check recovery</button>
+      <button type="button" id="restore" disabled>Restore from backup</button>
+      <button type="button" id="strip-dry" disabled>Check strip</button>
+      <button type="button" id="strip" disabled>Write strip</button>
+      <button type="button" id="anonymize" disabled>Anonymize</button>
     </div>
     <p id="say" class="say">Legal text is never opened. Launch is the only button that starts a harness.</p>
     <details>
@@ -43,6 +88,9 @@
     </details>
   </section>
 </main>
+</section>
+</div>
+</div>
 <script src="app.js"></script>
 </body>
 </html>

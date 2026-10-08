@@ -18,7 +18,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -36,14 +42,48 @@ def _ui_dir() -> Path:
     return HERE / "ui"
 
 
+def _emit(text: str) -> None:
+    if sys.stdout is None:
+        return
+    try:
+        print(text)
+    except OSError:
+        return
+
+
 def _print(rec: dict) -> int:
-    print(json.dumps(rec, indent=2, ensure_ascii=False))
+    _emit(json.dumps(rec, indent=2, ensure_ascii=False))
     return 0 if rec.get("kind") in ("OK", "TRUNCATED", "DRY_RUN", "VERIFIED", "ALREADY_OK",
                                     "LAUNCHED", "OPENWORK_FOCUS", "UNPROVEN", "NO_BAK",
                                     "BINARY_ABSENT", "UNMEASURED", "DO_NOT_REINGEST") else 2
 
 
-def _serve(port: int) -> int:
+def _ours(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/verbs", timeout=0.4) as res:
+            body = json.loads(res.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, ValueError, TimeoutError):
+        return False
+    verbs = body.get("verbs") if isinstance(body, dict) else None
+    return isinstance(verbs, list) and "find" in verbs and "resume" in verbs
+
+
+def _open_page(port: int) -> None:
+    webbrowser.open(f"http://127.0.0.1:{port}/")
+
+
+def _alert(text: str) -> None:
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, text, "Sessions", 0x10)
+            return
+        except OSError:
+            pass
+    _emit(text)
+
+
+def _serve(port: int, open_browser: bool = False) -> int:
     ui = _ui_dir()
     allow = {
         "/": ui / "index.html",
@@ -66,12 +106,19 @@ def _serve(port: int) -> int:
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
-        def _send(self, code: int, body: bytes, content_type: str) -> None:
+        def setup(self) -> None:
+            super().setup()
+            self.connection.settimeout(30)
+
+        def _send(self, code: int, body: bytes, content_type: str, close: bool = False) -> None:
             self.send_response(code)
             self._cors()
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
+            if close:
+                self.send_header("Connection", "close")
+                self.close_connection = True
             self.end_headers()
             self.wfile.write(body)
 
@@ -83,12 +130,21 @@ def _serve(port: int) -> int:
             self._send(204, b"", "text/plain")
 
         def do_GET(self) -> None:  # noqa: N802
+            try:
+                self._get()
+            except Exception as exc:
+                self._json(500, {"error": "INTERNAL", "detail": type(exc).__name__})
+
+        def _get(self) -> None:
             path = self.path.split("?", 1)[0]
             if path == "/api/verbs":
                 self._json(200, {"verbs": list(engine.VERBS), "harnesses": list(engine.HARNESSES)})
                 return
             if path == "/api/homes":
                 self._json(200, {"homes": engine.home_status()})
+                return
+            if path == "/api/places":
+                self._json(200, engine.places())
                 return
             file = allow.get(path)
             if file is None or not file.is_file():
@@ -99,15 +155,21 @@ def _serve(port: int) -> int:
 
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            if path == "/api/shutdown":
+                self._json(200, {"kind": "OK"})
+                threading.Thread(target=httpd.shutdown, daemon=True).start()
+                return
             if path != "/api/run":
                 self._json(404, {"kind": "NOT_FOUND", "path": path})
                 return
             try:
                 length = int(self.headers.get("Content-Length") or "0")
             except ValueError:
-                length = 0
-            if length > 1_000_000:
-                self._json(400, {"error": "BAD_REQUEST", "detail": "body too large"})
+                length = -1
+            if length < 0 or length > 1_000_000:
+                self._send(400, json.dumps({
+                    "error": "BAD_REQUEST", "detail": "body length",
+                }).encode("utf-8"), "application/json; charset=utf-8", close=True)
                 return
             raw = self.rfile.read(length) if length else b"{}"
             try:
@@ -123,22 +185,53 @@ def _serve(port: int) -> int:
             except engine.PageError as exc:
                 self._json(400, {"error": exc.kind, "detail": str(exc)})
                 return
+            except Exception as exc:
+                self._json(500, {"error": "INTERNAL", "detail": type(exc).__name__})
+                return
             self._json(200, rec)
 
+    class Bound(ThreadingHTTPServer):
+        daemon_threads = True
+
     try:
-        httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        httpd = Bound(("127.0.0.1", port), Handler)
     except OSError as exc:
-        print(json.dumps({"kind": "BIND_FAILED", "port": port, "detail": str(exc)}))
+        _emit(json.dumps({"kind": "BIND_FAILED", "port": port, "detail": str(exc)}))
         return 2
-    print(json.dumps({"kind": "OK", "url": f"http://127.0.0.1:{port}/"}))
+    if open_browser:
+        def _later() -> None:
+            for _ in range(50):
+                if _ours(port):
+                    _open_page(port)
+                    return
+                time.sleep(0.05)
+        threading.Thread(target=_later, daemon=True).start()
+    _emit(json.dumps({"kind": "OK", "url": f"http://127.0.0.1:{port}/"}))
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         return 0
+    finally:
+        httpd.server_close()
     return 0
 
 
+def _launch_gui(preferred: int = 8786) -> int:
+    """Open the Sessions page. A page that is already up is focused, not started twice."""
+    for port in range(preferred, preferred + 10):
+        if _ours(port):
+            _open_page(port)
+            return 0
+        rc = _serve(port, open_browser=True)
+        if rc == 0:
+            return 0
+    _alert("Sessions could not open a local page on ports 8786–8795.")
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
+    if argv is None and getattr(sys, "frozen", False) and len(sys.argv) <= 1:
+        return _launch_gui()
     parser = argparse.ArgumentParser(prog="sessions_page")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -177,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
 
     srv = sub.add_parser("serve")
     srv.add_argument("--port", type=int, default=8786)
+    srv.add_argument("--no-browser", action="store_true")
     sub.add_parser("verbs")
 
     args = parser.parse_args(argv)
@@ -209,7 +303,7 @@ def main(argv: list[str] | None = None) -> int:
                            "gate": {"verbs": list(engine.VERBS), "harnesses": list(engine.HARNESSES)},
                            "legal_omitted": 0})
         if args.cmd == "serve":
-            return _serve(args.port)
+            return _serve(args.port, open_browser=not args.no_browser)
     except engine.PageError as exc:
         print(json.dumps({"schema": engine.SCHEMA, "verb": args.cmd, "kind": exc.kind,
                           "gate": {"detail": str(exc)}, "legal_omitted": int(exc.kind == "LEGAL_OMITTED")}))

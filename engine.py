@@ -9,6 +9,7 @@ original. It does not repair sqlite or JSONL in place.
 """
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import os
@@ -16,6 +17,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -24,10 +26,11 @@ TRANSCRIPT = "cosmos-transcript/1"
 INDEX_SCHEMA = "sessions-page-index/1"
 MAX_BYTES = 48 * 1024 * 1024
 HEAD_BYTES = 8192
+PREVIEW_WHOLE = 512 * 1024
 DEFAULT_LIMIT = 200
 
 VERBS = (
-    "find", "import", "export", "index", "recover", "resume",
+    "find", "preview", "import", "export", "index", "recover", "resume",
     "scan", "load", "convert", "diff", "check", "anonymize",
     "crash-recover", "strip", "strip_dry", "doi",
 )
@@ -35,6 +38,9 @@ VERBS = (
 HARNESSES = (
     "grok", "claude", "codex", "cursor", "cowork", "openwork",
     "claude_desktop", "gemini",
+    "hermes", "cline", "kilo", "roo", "pi", "copilot", "continue",
+    "aider", "goose", "qwen", "amp", "openhands", "crush", "amazonq",
+    "dsh", "factory", "windsurf", "augment",
 )
 
 _ILLEGAL = ':*?"<>|\\/'
@@ -78,7 +84,33 @@ PREFIX = {
     "openwork": "ow",
     "claude_desktop": "cd",
     "gemini": "gem",
+    "hermes": "hm",
+    "cline": "cln",
+    "kilo": "kilo",
+    "roo": "roo",
+    "pi": "pi",
+    "copilot": "cop",
+    "continue": "con",
+    "aider": "aid",
+    "goose": "goo",
+    "qwen": "qw",
+    "amp": "amp",
+    "openhands": "oh",
+    "crush": "cru",
+    "amazonq": "aq",
+    "dsh": "dsh",
+    "factory": "fac",
+    "windsurf": "wnd",
+    "augment": "aug",
 }
+_EDITORS = (
+    "Code", "Code - Insiders", "Cursor", "Windsurf", "VSCodium", "Cline", "Kilo",
+)
+_MESSAGE_HARNESSES = frozenset({
+    "claude", "claude_desktop", "cursor", "gemini", "pi", "qwen", "continue",
+    "goose", "amp", "crush", "openhands", "factory", "windsurf", "augment",
+    "dsh", "amazonq", "cline", "kilo", "roo", "aider",
+})
 
 
 class PageError(RuntimeError):
@@ -138,8 +170,283 @@ def _existing_dir(candidates: list[Path]) -> Path | None:
     return None
 
 
+def _env_or(key: str, fallback: Path | None) -> Path | None:
+    raw = os.environ.get(key)
+    return Path(raw) if raw else fallback
+
+
+def _editor_task_dirs(extension_ids: tuple[str, ...], cli_dirs: tuple[Path, ...]) -> list[Path]:
+    found: list[Path] = []
+    appdata = os.environ.get("APPDATA") or ""
+    if appdata:
+        base = Path(appdata)
+        for editor in _EDITORS:
+            storage = base / editor / "User" / "globalStorage"
+            for ext in extension_ids:
+                tasks = storage / ext / "tasks"
+                try:
+                    if tasks.is_dir() and not tasks.is_symlink():
+                        found.append(tasks)
+                except OSError:
+                    continue
+    for path in cli_dirs:
+        try:
+            if path.is_dir() and not path.is_symlink():
+                found.append(path)
+        except OSError:
+            continue
+    return found
+
+
+def _is_real_dir(path: Path) -> bool:
+    try:
+        return path.is_dir() and not path.is_symlink()
+    except OSError:
+        return False
+
+
+def _is_real_file(path: Path) -> bool:
+    try:
+        return path.is_file() and not path.is_symlink()
+    except OSError:
+        return False
+
+
+def _same_path(path: Path, peers: list[Path]) -> bool:
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+    for peer in peers:
+        try:
+            if peer.resolve() == resolved:
+                return True
+        except OSError:
+            if peer == path:
+                return True
+    return False
+
+
+def _xdg_data() -> Path:
+    raw = os.environ.get("XDG_DATA_HOME")
+    return Path(raw) if raw else Path.home() / ".local" / "share"
+
+
+def _jetbrains_task_dirs(extension_ids: tuple[str, ...]) -> list[Path]:
+    appdata = os.environ.get("APPDATA") or ""
+    if not appdata:
+        return []
+    base = Path(appdata) / "JetBrains"
+    if not _is_real_dir(base):
+        return []
+    found: list[Path] = []
+    try:
+        ides = list(base.iterdir())
+    except OSError:
+        return []
+    for ide in ides:
+        if not _is_real_dir(ide):
+            continue
+        for ext in extension_ids:
+            tasks = ide / "globalStorage" / ext / "tasks"
+            if _is_real_dir(tasks):
+                found.append(tasks)
+    return found
+
+
+def _first_existing_dir(paths: list[Path], fallback: Path) -> Path:
+    for path in paths:
+        if _is_real_dir(path):
+            return path
+    return fallback
+
+
+def _cline_peer_dirs() -> list[Path]:
+    """Legacy editor tasks and the CLI/SDK `data/sessions` tree."""
+    home = Path.home()
+    found: list[Path] = []
+    if os.environ.get("CLINE_SESSION_DATA_DIR"):
+        found.append(Path(os.environ["CLINE_SESSION_DATA_DIR"]))
+    if os.environ.get("CLINE_TASKS"):
+        found.append(Path(os.environ["CLINE_TASKS"]))
+    if os.environ.get("CLINE_DATA_DIR"):
+        base = Path(os.environ["CLINE_DATA_DIR"])
+        found.extend((base / "sessions", base / "tasks"))
+    if os.environ.get("CLINE_DIR"):
+        base = Path(os.environ["CLINE_DIR"]) / "data"
+        found.extend((base / "sessions", base / "tasks"))
+    exts = ("saoudrizwan.claude-dev", "cline.cline")
+    found.extend(_editor_task_dirs(exts, ()))
+    found.extend(_jetbrains_task_dirs(exts))
+    found.extend((home / ".cline" / "data" / "sessions", home / ".cline" / "data" / "tasks"))
+    return found
+
+
+def _cline_home() -> Path:
+    peers = _cline_peer_dirs()
+    appdata = os.environ.get("APPDATA") or ""
+    fallback = (
+        Path(appdata) / "Code" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "tasks"
+        if appdata else Path.home() / ".cline" / "data" / "sessions"
+    )
+    if os.environ.get("CLINE_SESSION_DATA_DIR"):
+        return Path(os.environ["CLINE_SESSION_DATA_DIR"])
+    if os.environ.get("CLINE_TASKS"):
+        return Path(os.environ["CLINE_TASKS"])
+    return _first_existing_dir(peers, fallback)
+
+
+def _kilo_peer_dirs() -> list[Path]:
+    home = Path.home()
+    found: list[Path] = []
+    if os.environ.get("KILO_TASKS"):
+        found.append(Path(os.environ["KILO_TASKS"]))
+    found.extend(_editor_task_dirs(("kilocode.kilo-code",), ()))
+    found.extend((
+        home / ".kilocode" / "cli" / "global" / "tasks",
+        home / ".kilocode" / "globalStorage" / "kilocode.kilo-code" / "tasks",
+        home / ".kilocode" / "globalStorage" / "tasks",
+    ))
+    return found
+
+
+def _kilo_home() -> Path:
+    if os.environ.get("KILO_TASKS"):
+        return Path(os.environ["KILO_TASKS"])
+    appdata = os.environ.get("APPDATA") or ""
+    fallback = (
+        Path(appdata) / "Code" / "User" / "globalStorage" / "kilocode.kilo-code" / "tasks"
+        if appdata else Path.home() / ".kilocode" / "cli" / "global" / "tasks"
+    )
+    return _first_existing_dir(_kilo_peer_dirs(), fallback)
+
+
+def _roo_peer_dirs() -> list[Path]:
+    home = Path.home()
+    found: list[Path] = []
+    if os.environ.get("ROO_TASKS"):
+        found.append(Path(os.environ["ROO_TASKS"]))
+    exts = ("rooveterinaryinc.roo-cline",)
+    found.extend(_editor_task_dirs(exts, ()))
+    found.extend(_jetbrains_task_dirs(exts))
+    found.append(home / ".roo" / "tasks")
+    return found
+
+
+def _roo_home() -> Path:
+    if os.environ.get("ROO_TASKS"):
+        return Path(os.environ["ROO_TASKS"])
+    appdata = os.environ.get("APPDATA") or ""
+    fallback = (
+        Path(appdata) / "Code" / "User" / "globalStorage" / "rooveterinaryinc.roo-cline" / "tasks"
+        if appdata else Path.home() / ".roo" / "tasks"
+    )
+    return _first_existing_dir(_roo_peer_dirs(), fallback)
+
+
+def _hermes_db_candidates() -> list[Path]:
+    home = Path.home()
+    found: list[Path] = []
+    if os.environ.get("HERMES_STATE"):
+        found.append(Path(os.environ["HERMES_STATE"]))
+    if os.environ.get("HERMES_HOME"):
+        found.append(Path(os.environ["HERMES_HOME"]) / "state.db")
+    found.append(home / ".hermes" / "state.db")
+    local = os.environ.get("LOCALAPPDATA") or ""
+    if local:
+        found.append(Path(local) / "hermes" / "state.db")
+    return found
+
+
+def _hermes_home() -> Path:
+    found = _existing_file(_hermes_db_candidates())
+    if found is not None:
+        return found
+    if os.environ.get("HERMES_HOME"):
+        return Path(os.environ["HERMES_HOME"]) / "state.db"
+    return Path.home() / ".hermes" / "state.db"
+
+
+def _pi_home() -> Path:
+    if os.environ.get("PI_CODING_AGENT_SESSION_DIR"):
+        return Path(os.environ["PI_CODING_AGENT_SESSION_DIR"])
+    return _env_or("PI_SESSIONS", Path.home() / ".pi" / "agent" / "sessions")
+
+
+def _gemini_home() -> Path:
+    if os.environ.get("GEMINI_SESSIONS"):
+        return Path(os.environ["GEMINI_SESSIONS"])
+    base = Path(os.environ["GEMINI_CLI_HOME"]) if os.environ.get("GEMINI_CLI_HOME") else Path.home()
+    return base / ".gemini" / "tmp"
+
+
+def _continue_home() -> Path:
+    if os.environ.get("CONTINUE_SESSIONS"):
+        return Path(os.environ["CONTINUE_SESSIONS"])
+    if os.environ.get("CONTINUE_GLOBAL_DIR"):
+        return Path(os.environ["CONTINUE_GLOBAL_DIR"]) / "sessions"
+    return Path.home() / ".continue" / "sessions"
+
+
+def _goose_db_candidates() -> list[Path]:
+    home = Path.home()
+    found: list[Path] = []
+    root = os.environ.get("GOOSE_PATH_ROOT") or ""
+    if root and Path(root).is_absolute():
+        found.append(Path(root) / "data" / "sessions" / "sessions.db")
+    appdata = os.environ.get("APPDATA") or ""
+    if appdata:
+        found.append(Path(appdata) / "Block" / "goose" / "data" / "sessions" / "sessions.db")
+    found.append(home / ".local" / "share" / "goose" / "sessions" / "sessions.db")
+    mac = home / "Library" / "Application Support" / "Block" / "goose"
+    found.extend((mac / "data" / "sessions" / "sessions.db", mac / "sessions" / "sessions.db"))
+    return found
+
+
+def _goose_home() -> Path:
+    if os.environ.get("GOOSE_SESSIONS"):
+        return Path(os.environ["GOOSE_SESSIONS"])
+    found = _existing_file(_goose_db_candidates())
+    if found is not None:
+        return found
+    home = Path.home()
+    appdata = os.environ.get("APPDATA") or ""
+    legacy = []
+    if appdata:
+        legacy.append(Path(appdata) / "Block" / "goose" / "data" / "sessions")
+    legacy.append(home / ".local" / "share" / "goose" / "sessions")
+    for directory in legacy:
+        if not _is_real_dir(directory):
+            continue
+        try:
+            if any(p.is_file() and not p.is_symlink() for p in directory.glob("*.jsonl")):
+                return directory
+        except OSError:
+            continue
+    root = os.environ.get("GOOSE_PATH_ROOT") or ""
+    if root and Path(root).is_absolute():
+        return Path(root) / "data" / "sessions" / "sessions.db"
+    if appdata:
+        return Path(appdata) / "Block" / "goose" / "data" / "sessions" / "sessions.db"
+    return home / ".local" / "share" / "goose" / "sessions" / "sessions.db"
+
+
+def _amp_home() -> Path:
+    if os.environ.get("AMP_THREADS_DIR"):
+        return Path(os.environ["AMP_THREADS_DIR"])
+    if os.environ.get("AMP_SESSIONS"):
+        return Path(os.environ["AMP_SESSIONS"])
+    return _xdg_data() / "amp" / "threads"
+
+
+def _crush_home() -> Path:
+    if os.environ.get("CRUSH_SESSIONS"):
+        return Path(os.environ["CRUSH_SESSIONS"])
+    return _xdg_data() / "crush" / "projects.json"
+
+
 def default_homes() -> dict[str, Path | None]:
-    """Bound locations only. A missing directory stays None — never a guessed volume."""
+    """Documented store locations. No transcript in the docs means None, so n stays null."""
     home = Path.home()
     appdata = os.environ.get("APPDATA") or ""
     local = os.environ.get("LOCALAPPDATA") or ""
@@ -152,7 +459,6 @@ def default_homes() -> dict[str, Path | None]:
         desktop = Path(os.environ["CLAUDE_DESKTOP_SESSIONS"])
     elif appdata:
         desktop = Path(appdata) / "Claude" / "local-agent-mode-sessions"
-    gemini = Path(os.environ["GEMINI_SESSIONS"]) if os.environ.get("GEMINI_SESSIONS") else None
     cowork = None
     if os.environ.get("COWORK_CATALOG"):
         cowork = Path(os.environ["COWORK_CATALOG"])
@@ -173,9 +479,27 @@ def default_homes() -> dict[str, Path | None]:
         "codex": codex,
         "cursor": cursor,
         "claude_desktop": desktop,
-        "gemini": gemini,
+        "gemini": _gemini_home(),
         "cowork": cowork,
         "openwork": openwork,
+        "hermes": _hermes_home(),
+        "cline": _cline_home(),
+        "kilo": _kilo_home(),
+        "roo": _roo_home(),
+        "pi": _pi_home(),
+        "copilot": _env_or("COPILOT_SESSION_STATE", home / ".copilot" / "session-state"),
+        "continue": _continue_home(),
+        "aider": Path(os.environ["AIDER_CHAT_HISTORY_FILE"]) if os.environ.get("AIDER_CHAT_HISTORY_FILE") else None,
+        "goose": _goose_home(),
+        "qwen": _env_or("QWEN_SESSIONS", home / ".qwen" / "projects"),
+        "amp": _amp_home(),
+        "openhands": _env_or("OPENHANDS_SESSIONS", home / ".openhands" / "conversations"),
+        "crush": _crush_home(),
+        "amazonq": Path(os.environ["AMAZONQ_HISTORY"]) if os.environ.get("AMAZONQ_HISTORY") else None,
+        "dsh": Path(os.environ["DSH_HOME"]) if os.environ.get("DSH_HOME") else home / ".dsh",
+        "factory": None,
+        "windsurf": None,
+        "augment": None,
     }
 
 
@@ -199,6 +523,135 @@ def home_status(homes: dict | None = None) -> list[dict]:
             "status": "PRESENT" if present else "ABSENT",
         })
     return rows
+
+
+_DRIVE_KIND = {
+    0: "unknown", 1: "noroot", 2: "removable", 3: "fixed",
+    4: "remote", 5: "cdrom", 6: "ramdisk",
+}
+
+
+def _drive_letter(path: str | None) -> str | None:
+    text = str(path or "").replace("/", "\\")
+    if len(text) >= 2 and text[1] == ":":
+        return text[:2].upper()
+    return None
+
+
+_win_lock = threading.Lock()
+_win_dll = None
+
+
+def _win_kernel():
+    """One kernel32 with prototypes set once. Do not mutate the shared windll."""
+    global _win_dll
+    with _win_lock:
+        if _win_dll is not None:
+            return _win_dll
+        import ctypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetLogicalDriveStringsW.argtypes = [ctypes.c_uint32, ctypes.c_wchar_p]
+        kernel.GetLogicalDriveStringsW.restype = ctypes.c_uint32
+        kernel.GetDriveTypeW.argtypes = [ctypes.c_wchar_p]
+        kernel.GetDriveTypeW.restype = ctypes.c_uint32
+        kernel.GetVolumeInformationW.argtypes = [
+            ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_uint32), ctypes.c_wchar_p, ctypes.c_uint32,
+        ]
+        kernel.GetVolumeInformationW.restype = ctypes.c_int
+        kernel.GetDiskFreeSpaceExW.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.POINTER(ctypes.c_ulonglong),
+            ctypes.POINTER(ctypes.c_ulonglong),
+            ctypes.POINTER(ctypes.c_ulonglong),
+        ]
+        kernel.GetDiskFreeSpaceExW.restype = ctypes.c_int
+        kernel.SetErrorMode.argtypes = [ctypes.c_uint32]
+        kernel.SetErrorMode.restype = ctypes.c_uint32
+        _win_dll = kernel
+        return kernel
+
+
+def list_drives() -> list[dict]:
+    """Volume letters and labels only. Does not walk the files on the drive."""
+    if os.name != "nt":
+        root = Path("/")
+        return [{"id": "/", "path": "/", "label": "", "kind": "fixed", "fs": "",
+                 "total": None, "free": None, "ready": root.exists()}]
+    import ctypes
+    kernel = _win_kernel()
+    # SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX. An empty tray must not
+    # raise a system dialog, and a dead network root is not queried below.
+    old_mode = kernel.SetErrorMode(0x0001 | 0x8000)
+    try:
+        size = 256
+        buf = ctypes.create_unicode_buffer(size)
+        n = int(kernel.GetLogicalDriveStringsW(size, buf))
+        while n >= size:
+            size = n + 2
+            if size > 65536:
+                return []
+            buf = ctypes.create_unicode_buffer(size)
+            n = int(kernel.GetLogicalDriveStringsW(size, buf))
+        if n <= 0:
+            return []
+        text = "".join(buf[i] for i in range(n))
+        roots = [part for part in text.split("\x00") if part]
+        rows = []
+        for root in roots:
+            kind_n = int(kernel.GetDriveTypeW(root))
+            kind = _DRIVE_KIND.get(kind_n, "unknown")
+            letter = root[:2].upper()
+            if kind not in ("fixed", "ramdisk", "removable"):
+                rows.append({
+                    "id": letter, "path": root, "label": "", "kind": kind, "fs": "",
+                    "total": None, "free": None, "ready": False,
+                })
+                continue
+            label = ctypes.create_unicode_buffer(261)
+            fs = ctypes.create_unicode_buffer(32)
+            serial = ctypes.c_uint32()
+            maxcl = ctypes.c_uint32()
+            flags = ctypes.c_uint32()
+            named = bool(kernel.GetVolumeInformationW(
+                root, label, 261, ctypes.byref(serial), ctypes.byref(maxcl),
+                ctypes.byref(flags), fs, 32,
+            ))
+            free = ctypes.c_ulonglong()
+            total = ctypes.c_ulonglong()
+            avail = ctypes.c_ulonglong()
+            sized = bool(kernel.GetDiskFreeSpaceExW(
+                root, ctypes.byref(avail), ctypes.byref(total), ctypes.byref(free),
+            ))
+            rows.append({
+                "id": letter,
+                "path": root,
+                "label": label.value if named else "",
+                "kind": kind,
+                "fs": fs.value if named else "",
+                "total": int(total.value) if sized else None,
+                "free": int(free.value) if sized else None,
+                "ready": named or sized,
+            })
+        return rows
+    finally:
+        kernel.SetErrorMode(old_mode)
+
+
+def places(homes: dict | None = None) -> dict:
+    """Drives first, then each default location. Counts stay null until find."""
+    homes = homes if homes is not None else default_homes()
+    drives = list_drives()
+    rows = []
+    for row in home_status(homes):
+        raw = homes.get(row["harness"])
+        candidate = str(raw) if raw else None
+        item = dict(row)
+        item["candidate"] = candidate
+        item["drive"] = _drive_letter(row.get("path") or candidate)
+        rows.append(item)
+    return {"drives": drives, "homes": rows}
 
 
 def _mtime(path: Path) -> float:
@@ -279,6 +732,70 @@ def _one_line(text: str, limit: int = 80) -> str:
     return flat[:limit]
 
 
+def _summary_title(*sources: dict) -> str:
+    """Short name from a session summary. Root fields win over a nested info object."""
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in ("generated_title", "session_summary", "title"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return _one_line(value, 80)
+    return ""
+
+
+def _user_line(obj: dict) -> str:
+    """Text of a user turn. System and tool lines return empty."""
+    kind = str(obj.get("type") or obj.get("role") or "").lower()
+    if kind == "response_item":
+        payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
+        kind = str(payload.get("role") or "").lower()
+        text = _text_of(payload.get("content"))
+    elif kind == "user.message":
+        data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+        kind = "user"
+        text = _text_of(data.get("content"))
+    else:
+        msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
+        nested = str(msg.get("role") or "").lower() if isinstance(msg, dict) else ""
+        if kind not in ("user", "human") and nested:
+            kind = nested
+        content = None
+        if isinstance(msg, dict):
+            content = msg.get("content")
+            if content is None:
+                content = msg.get("text")
+        text = _text_of(content)
+    if kind not in ("user", "human"):
+        return ""
+    return text
+
+
+def _first_user_title(path: Path, limit: int = 262144) -> str:
+    """First user line, one screen of text at most. Does not hash the file."""
+    read = 0
+    try:
+        handle = path.open("rb")
+    except OSError:
+        return ""
+    with handle:
+        for line in handle:
+            read += len(line)
+            piece = line.strip()
+            if piece:
+                try:
+                    obj = json.loads(piece.decode("utf-8", errors="replace"))
+                except ValueError:
+                    obj = None
+                if isinstance(obj, dict):
+                    title = _user_line(obj)
+                    if title.strip():
+                        return _one_line(title, 80)
+            if read >= limit:
+                break
+    return ""
+
+
 def _unescape_json_piece(text: str) -> str:
     return (
         text.replace("\\\\", "\\")
@@ -333,45 +850,84 @@ def _enum_grok(root: Path) -> list[dict]:
     if not root.is_dir():
         return []
     hits = []
-    try:
-        summaries = root.rglob("summary.json")
-    except OSError:
-        return []
-    for summary in summaries:
-        folder = summary.parent
-        hist = folder / "chat_history.jsonl"
-        if not hist.is_file():
-            continue
+    stack = [root]
+    while stack:
+        current = stack.pop()
         try:
-            info = json.loads(summary.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            info = {}
-        inner = info.get("info") if isinstance(info.get("info"), dict) else info
-        vid = str(inner.get("id") or folder.name)
-        cwd = str(inner.get("cwd") or "")
-        title = str(inner.get("generated_title") or inner.get("title") or "")
-        hits.append(_hit(
-            harness="grok", vendor_id=vid, path=hist, cwd=cwd, title=title,
-            updated=_mtime(hist), nbytes=hist.stat().st_size,
-        ))
+            scan = os.scandir(current)
+        except OSError:
+            continue
+        with scan:
+            for entry in scan:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name not in ("node_modules", ".git"):
+                            stack.append(Path(entry.path))
+                        continue
+                    if entry.name != "summary.json":
+                        continue
+                except OSError:
+                    continue
+                folder = Path(entry.path).parent
+                hist = folder / "chat_history.jsonl"
+                try:
+                    st = hist.stat()
+                except OSError:
+                    continue
+                if not hist.is_file():
+                    continue
+                try:
+                    info = json.loads(Path(entry.path).read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    info = {}
+                if not isinstance(info, dict):
+                    info = {}
+                inner = info.get("info") if isinstance(info.get("info"), dict) else info
+                vid = str(inner.get("id") or folder.name)
+                cwd = str(inner.get("cwd") or "")
+                title = _summary_title(info, inner)
+                hits.append(_hit(
+                    harness="grok", vendor_id=vid, path=hist, cwd=cwd, title=title,
+                    updated=st.st_mtime, nbytes=st.st_size,
+                ))
     return hits
 
 
+def _claude_project_cwd(name: str) -> str:
+    """Best-effort reverse of Claude's project-folder encoding, for the legal gate only."""
+    text = name
+    if len(text) >= 3 and text[0].isalpha() and text[1:3] == "--":
+        text = text[0] + ":\\" + text[3:]
+    return text.replace("-", "\\")
+
+
 def _consume_claude_dir(project: Path, hits: list[dict]) -> None:
+    """List session files. Do not open each transcript. Legal is the folder name."""
+    decoded = _claude_project_cwd(project.name)
+    folder_legal = is_legal(str(project), "", decoded, "")
     try:
-        files = list(project.iterdir())
+        scan = os.scandir(project)
     except OSError:
         return
-    for path in files:
-        if not path.is_file() or path.suffix != ".jsonl" or path.is_symlink():
-            continue
-        if not _UUID.fullmatch(path.stem):
-            continue
-        cwd, title = _sniff(path)
-        hits.append(_hit(
-            harness="claude", vendor_id=path.stem, path=path, cwd=cwd, title=title,
-            updated=_mtime(path), nbytes=path.stat().st_size,
-        ))
+    with scan:
+        for entry in scan:
+            try:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+            except OSError:
+                continue
+            stem = entry.name[:-6] if entry.name.endswith(".jsonl") else ""
+            if not stem or not _UUID.fullmatch(stem):
+                continue
+            try:
+                st = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            hits.append(_hit(
+                harness="claude", vendor_id=stem, path=Path(entry.path),
+                cwd=decoded if folder_legal else "", title="",
+                updated=st.st_mtime, nbytes=st.st_size,
+            ))
 
 
 def _enum_claude(root: Path) -> list[dict]:
@@ -427,7 +983,7 @@ def _enum_codex_db(db: Path) -> list[dict]:
     hits = []
     try:
         uri = db.resolve().as_uri() + "?mode=ro"
-        con = sqlite3.connect(uri, uri=True)
+        con = sqlite3.connect(uri, uri=True, timeout=1.0)
         cols = {r[1] for r in con.execute("PRAGMA table_info(threads)")}
         if not {"id", "cwd"}.issubset(cols):
             con.close()
@@ -526,7 +1082,7 @@ def _enum_cursor_desktop() -> list[dict]:
     hits = []
     try:
         uri = path.resolve().as_uri() + "?mode=ro"
-        con = sqlite3.connect(uri, uri=True)
+        con = sqlite3.connect(uri, uri=True, timeout=1.0)
         cols = {row[1] for row in con.execute("PRAGMA table_info(composerHeaders)")}
         if not {"composerId", "lastUpdatedAt", "isArchived", "isSubagent", "value"}.issubset(cols):
             con.close()
@@ -620,7 +1176,7 @@ def _enum_openwork(store: Path) -> list[dict]:
         return []
     try:
         uri = db.resolve().as_uri() + "?mode=ro"
-        con = sqlite3.connect(uri, uri=True)
+        con = sqlite3.connect(uri, uri=True, timeout=1.0)
         rows = list(con.execute("SELECT id, title, directory FROM session"))
         con.close()
     except sqlite3.Error as exc:
@@ -656,8 +1212,560 @@ def _enum_loose_jsonl(harness: str, root: Path | None) -> list[dict]:
     return hits
 
 
-def _walk(homes: dict) -> list[dict]:
+def _sql_rows(db: Path, statements: tuple[str, ...]) -> list[tuple]:
+    if not db.is_file() or db.is_symlink():
+        return []
+    uri = db.resolve().as_uri() + "?mode=ro"
+    try:
+        con = sqlite3.connect(uri, uri=True, timeout=1.0)
+    except sqlite3.Error as exc:
+        raise PageError("SCHEMA_UNKNOWN", str(exc)) from exc
+    last = "SCHEMA_UNKNOWN"
+    try:
+        for sql in statements:
+            try:
+                rows = list(con.execute(sql))
+                con.close()
+                return rows
+            except sqlite3.OperationalError as exc:
+                last = str(exc)
+                continue
+    finally:
+        try:
+            con.close()
+        except sqlite3.Error:
+            pass
+    raise PageError("SCHEMA_UNKNOWN", last)
+
+
+def _epoch(value, fallback: float) -> float:
+    if isinstance(value, (int, float)) and value > 0:
+        number = float(value)
+        return number / 1000.0 if number > 10**11 else number
+    return fallback
+
+
+def _json_title(path: Path) -> str:
+    try:
+        if not path.is_file() or path.is_symlink() or path.stat().st_size > 32768:
+            return ""
+        obj = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(obj, dict):
+        return ""
+    for key in ("title", "task", "name"):
+        text = obj.get(key)
+        if isinstance(text, str) and text.strip():
+            return _one_line(text, 120)
+    return ""
+
+
+def _enum_sqlite_meta(harness: str, db: Path, statements: tuple[str, ...]) -> list[dict]:
+    rows = _sql_rows(db, statements)
+    fallback = _mtime(db)
+    hits = []
+    for sid, title, cwd, updated in rows:
+        hits.append(_hit(
+            harness=harness, vendor_id=str(sid), path=db,
+            cwd=str(cwd or ""), title=str(title or ""),
+            updated=_epoch(updated, fallback),
+        ))
+    return hits
+
+
+def _enum_hermes(db: Path) -> list[dict]:
+    return _enum_sqlite_meta("hermes", db, (
+        "SELECT id, COALESCE(title, display_name, ''), COALESCE(cwd, ''), "
+        "last_activity_at FROM sessions WHERE COALESCE(hidden, 0) = 0",
+        "SELECT id, COALESCE(title, display_name, ''), COALESCE(cwd, ''), "
+        "last_activity_at FROM sessions",
+    ))
+
+
+def _hermes_state_files(path: Path) -> list[Path]:
+    if _is_real_file(path):
+        bases = [path.parent]
+        files = [path]
+    elif _is_real_dir(path):
+        bases = [path]
+        files = [path / "state.db"] if _is_real_file(path / "state.db") else []
+    else:
+        return []
+    for base in bases:
+        profiles = base / "profiles"
+        if not _is_real_dir(profiles):
+            continue
+        try:
+            files.extend(db for db in profiles.glob("*/state.db") if _is_real_file(db))
+        except OSError:
+            continue
+    return files
+
+
+def _enum_hermes_home(path: Path) -> list[dict]:
+    peers = _hermes_db_candidates()
+    seeds = peers if _same_path(path, peers) or _same_path(path / "state.db", peers) else [path]
+    seen_db: set[str] = set()
+    seen_id: set[str] = set()
+    hits = []
+    for seed in seeds:
+        for db in _hermes_state_files(seed):
+            try:
+                key = str(db.resolve())
+            except OSError:
+                key = str(db)
+            if key in seen_db:
+                continue
+            seen_db.add(key)
+            try:
+                rows = _enum_hermes(db)
+            except PageError:
+                continue
+            for hit in rows:
+                if hit["id"] in seen_id:
+                    continue
+                seen_id.add(hit["id"])
+                hits.append(hit)
+    return hits
+
+
+def _copilot_identity(path: Path) -> tuple[str, str]:
+    """session.start carries the id. The directory name is not always that id."""
+    sid = path.parent.name
+    cwd = ""
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(HEAD_BYTES)
+    except OSError:
+        return sid, cwd
+    for line in raw.splitlines():
+        piece = line.strip()
+        if not piece:
+            continue
+        try:
+            obj = json.loads(piece.decode("utf-8", errors="replace"))
+        except ValueError:
+            continue
+        if not isinstance(obj, dict) or obj.get("type") != "session.start":
+            continue
+        data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+        found = data.get("sessionId") or data.get("session_id")
+        if isinstance(found, str) and found.strip():
+            sid = found.strip()
+        ctx = data.get("context") if isinstance(data.get("context"), dict) else {}
+        if isinstance(ctx.get("cwd"), str):
+            cwd = ctx["cwd"]
+        break
+    return sid, cwd
+
+
+def _enum_copilot(root: Path) -> list[dict]:
+    if _is_real_file(root) and root.name == "events.jsonl":
+        files = [root]
+    elif _is_real_dir(root):
+        try:
+            files = [p for p in root.glob("*/events.jsonl") if _is_real_file(p)]
+        except OSError:
+            return []
+    else:
+        return []
+    hits = []
+    seen: set[str] = set()
+    for path in files:
+        sid, cwd = _copilot_identity(path)
+        hit = _hit(
+            harness="copilot", vendor_id=sid, path=path, cwd=cwd,
+            updated=_mtime(path), nbytes=path.stat().st_size,
+        )
+        if hit["id"] in seen:
+            continue
+        seen.add(hit["id"])
+        hits.append(hit)
+    return hits
+
+
+def _enum_task_dirs(harness: str, root: Path) -> list[dict]:
+    if not root.is_dir() or root.is_symlink():
+        return []
+    try:
+        children = list(root.iterdir())
+    except OSError:
+        return []
+    folders = [root] if (root / "api_conversation_history.json").is_file() else children
+    hits = []
+    for folder in folders:
+        try:
+            if not folder.is_dir() or folder.is_symlink():
+                continue
+            hist = folder / "api_conversation_history.json"
+            if not hist.is_file() or hist.is_symlink():
+                continue
+            hits.append(_hit(
+                harness=harness, vendor_id=folder.name, path=hist,
+                title=_json_title(folder / "task_metadata.json"),
+                updated=_mtime(hist), nbytes=hist.stat().st_size,
+            ))
+        except OSError:
+            continue
+    return hits
+
+
+def _peer_dirs(root: Path, peers: list[Path]) -> list[Path]:
+    if _same_path(root, peers):
+        return [p for p in peers if _is_real_dir(p)]
+    return [root]
+
+
+def _enum_task_peers(harness: str, root: Path, peers: list[Path]) -> list[dict]:
+    hits = []
+    seen: set[str] = set()
+    for item in _peer_dirs(root, peers):
+        for hit in _enum_task_dirs(harness, item):
+            if hit["id"] in seen:
+                continue
+            seen.add(hit["id"])
+            hits.append(hit)
+    return hits
+
+
+def _enum_messages(harness: str, root: Path) -> list[dict]:
+    """Cline CLI/SDK: `<sessionId>/<sessionId>.messages.json`."""
+    if not _is_real_dir(root):
+        return []
+    files: list[Path] = []
+    named = root / f"{root.name}.messages.json"
+    if _is_real_file(named):
+        files.append(named)
+    try:
+        files.extend(p for p in root.glob("*/*.messages.json") if _is_real_file(p))
+    except OSError:
+        return []
+    hits = []
+    seen: set[str] = set()
+    for path in files:
+        vid = path.parent.name if path.parent != root else path.name[: -len(".messages.json")]
+        manifest = path.parent / f"{vid}.json"
+        hit = _hit(
+            harness=harness, vendor_id=vid, path=path,
+            title=_json_title(manifest),
+            updated=_mtime(path), nbytes=path.stat().st_size,
+        )
+        if hit["id"] in seen:
+            continue
+        seen.add(hit["id"])
+        hits.append(hit)
+    return hits
+
+
+def _enum_cline(root: Path) -> list[dict]:
+    peers = _cline_peer_dirs()
+    hits = []
+    seen: set[str] = set()
+    for item in _peer_dirs(root, peers):
+        for hit in _enum_task_dirs("cline", item) + _enum_messages("cline", item):
+            if hit["id"] in seen:
+                continue
+            seen.add(hit["id"])
+            hits.append(hit)
+    return hits
+
+
+def _enum_kilo(root: Path) -> list[dict]:
+    return _enum_task_peers("kilo", root, _kilo_peer_dirs())
+
+
+def _enum_roo(root: Path) -> list[dict]:
+    return _enum_task_peers("roo", root, _roo_peer_dirs())
+
+
+def _json_obj(path: Path, limit: int = 262144) -> dict:
+    try:
+        if not _is_real_file(path) or path.stat().st_size > limit:
+            return {}
+        obj = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def _project_root_file(path: Path) -> str:
+    marker = path.parent.parent / ".project_root"
+    try:
+        if marker.is_file() and not marker.is_symlink() and marker.stat().st_size < 1024:
+            return marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return ""
+
+
+def _enum_chat_tmp(harness: str, root: Path) -> list[dict]:
+    """Gemini `tmp/<project>/chats/*.{json,jsonl}` and Qwen `projects/<cwd>/chats/*.jsonl`."""
+    if not _is_real_dir(root):
+        return []
+    patterns = ("*.jsonl", "*.json") if root.name == "chats" else ("*/chats/**/*.jsonl", "*/chats/**/*.json")
+    files: list[Path] = []
+    try:
+        for pattern in patterns:
+            files.extend(root.glob(pattern))
+    except OSError:
+        return []
+    hits = []
+    seen: set[str] = set()
+    for path in files:
+        if not _is_real_file(path) or path.name == "sessions.json":
+            continue
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        hits.append(_hit(
+            harness=harness, vendor_id=path.stem, path=path,
+            cwd=_project_root_file(path),
+            updated=_mtime(path), nbytes=path.stat().st_size,
+        ))
+    return hits
+
+
+def _enum_continue(root: Path) -> list[dict]:
+    if not _is_real_dir(root):
+        return []
+    try:
+        files = [p for p in root.glob("*.json") if _is_real_file(p) and p.name != "sessions.json"]
+    except OSError:
+        return []
+    hits = []
+    for path in files:
+        obj = _json_obj(path)
+        sid = obj.get("sessionId") or obj.get("id")
+        vid = sid.strip() if isinstance(sid, str) and sid.strip() else path.stem
+        title = obj.get("title") if isinstance(obj.get("title"), str) else ""
+        cwd = obj.get("workspaceDirectory") if isinstance(obj.get("workspaceDirectory"), str) else ""
+        hits.append(_hit(
+            harness="continue", vendor_id=vid, path=path, cwd=cwd, title=_one_line(title, 120),
+            updated=_mtime(path), nbytes=path.stat().st_size,
+        ))
+    return hits
+
+
+def _enum_aider(path: Path) -> list[dict]:
+    """One history file from AIDER_CHAT_HISTORY_FILE. There is no global session directory."""
+    if not _is_real_file(path):
+        return []
+    return [_hit(
+        harness="aider", vendor_id=path.name, path=path,
+        updated=_mtime(path), nbytes=path.stat().st_size,
+    )]
+
+
+def _enum_goose(path: Path) -> list[dict]:
+    db = path if _is_real_file(path) and path.suffix.lower() == ".db" else None
+    if _is_real_dir(path):
+        nested = path / "sessions.db"
+        if _is_real_file(nested):
+            db = nested
+        else:
+            try:
+                files = [p for p in path.glob("*.jsonl") if _is_real_file(p)]
+            except OSError:
+                return []
+            hits = []
+            for item in files:
+                cwd, title = _sniff(item)
+                hits.append(_hit(
+                    harness="goose", vendor_id=item.stem, path=item, cwd=cwd, title=title,
+                    updated=_mtime(item), nbytes=item.stat().st_size,
+                ))
+            return hits
+    if db is None:
+        return []
+    return _enum_sqlite_meta("goose", db, (
+        "SELECT id, COALESCE(name, ''), COALESCE(working_dir, ''), updated_at FROM sessions "
+        "WHERE lower(COALESCE(session_type, 'user')) NOT IN ('hidden', 'subagent')",
+        "SELECT id, COALESCE(description, ''), COALESCE(working_dir, ''), updated_at FROM sessions "
+        "WHERE lower(COALESCE(session_type, 'user')) NOT IN ('hidden', 'subagent')",
+        "SELECT id, COALESCE(name, ''), COALESCE(working_dir, ''), updated_at FROM sessions",
+        "SELECT id, COALESCE(description, ''), COALESCE(working_dir, ''), updated_at FROM sessions",
+        "SELECT id, '', COALESCE(working_dir, ''), updated_at FROM sessions",
+    ))
+
+
+def _enum_amp(root: Path) -> list[dict]:
+    if _is_real_file(root) and root.suffix.lower() == ".json":
+        files = [root]
+    elif _is_real_dir(root):
+        try:
+            files = [p for p in root.glob("*.json") if _is_real_file(p)]
+        except OSError:
+            return []
+    else:
+        return []
+    hits = []
+    for path in files:
+        obj = _json_obj(path)
+        sid = obj.get("id")
+        vid = sid.strip() if isinstance(sid, str) and sid.strip() else path.stem
+        title = obj.get("title") if isinstance(obj.get("title"), str) else ""
+        hits.append(_hit(
+            harness="amp", vendor_id=vid, path=path, title=_one_line(title, 120),
+            updated=_mtime(path), nbytes=path.stat().st_size,
+        ))
+    return hits
+
+
+def _enum_openhands(root: Path) -> list[dict]:
+    states: list[Path] = []
+    if _is_real_file(root) and root.name == "base_state.json":
+        states = [root]
+    elif _is_real_dir(root):
+        direct = root / "base_state.json"
+        if _is_real_file(direct):
+            states = [direct]
+        else:
+            try:
+                states = [p for p in root.glob("*/base_state.json") if _is_real_file(p)]
+                states += [p for p in root.glob("conversations/*/base_state.json") if _is_real_file(p)]
+            except OSError:
+                return []
+    hits = []
+    seen: set[str] = set()
+    for path in states:
+        obj = _json_obj(path)
+        sid = obj.get("id") or obj.get("conversation_id")
+        vid = sid.strip() if isinstance(sid, str) and sid.strip() else path.parent.name
+        title = obj.get("title") if isinstance(obj.get("title"), str) else ""
+        cwd = obj.get("workspace") if isinstance(obj.get("workspace"), str) else ""
+        if not cwd and isinstance(obj.get("cwd"), str):
+            cwd = obj["cwd"]
+        hit = _hit(
+            harness="openhands", vendor_id=vid, path=path, cwd=cwd, title=_one_line(title, 120),
+            updated=_mtime(path), nbytes=path.stat().st_size,
+        )
+        if hit["id"] in seen:
+            continue
+        seen.add(hit["id"])
+        hits.append(hit)
+    return hits
+
+
+def _crush_db(project: dict) -> tuple[Path | None, str]:
+    raw_cwd = project.get("path")
+    cwd = raw_cwd if isinstance(raw_cwd, str) else ""
+    raw = project.get("data_dir")
+    if isinstance(raw, str) and raw.strip():
+        db = Path(raw)
+        if _is_real_dir(db):
+            db = db / "crush.db"
+    elif cwd:
+        db = Path(cwd) / ".crush" / "crush.db"
+    else:
+        return None, cwd
+    if not _is_real_file(db):
+        return None, cwd
+    return db, cwd
+
+
+def _enum_crush(path: Path) -> list[dict]:
+    projects: list[dict] = []
+    if _is_real_file(path) and path.name == "projects.json":
+        obj = _json_obj(path, limit=1_048_576)
+        raw = obj.get("projects")
+        if isinstance(raw, list):
+            projects = [item for item in raw if isinstance(item, dict)]
+    elif _is_real_file(path) and path.suffix.lower() == ".db":
+        projects = [{"data_dir": str(path), "path": ""}]
+    else:
+        return []
+    hits = []
+    seen: set[str] = set()
+    for project in projects:
+        db, cwd = _crush_db(project)
+        if db is None:
+            continue
+        try:
+            rows = _sql_rows(db, (
+                "SELECT id, COALESCE(title, ''), updated_at FROM sessions "
+                "WHERE parent_session_id IS NULL",
+                "SELECT id, COALESCE(title, ''), updated_at FROM sessions",
+            ))
+        except PageError:
+            continue
+        fallback = _mtime(db)
+        for sid, title, updated in rows:
+            hit = _hit(
+                harness="crush", vendor_id=str(sid), path=db, cwd=cwd,
+                title=str(title or ""), updated=_epoch(updated, fallback),
+            )
+            if hit["id"] in seen:
+                continue
+            seen.add(hit["id"])
+            hits.append(hit)
+    return hits
+
+
+def _enum_amazonq(path: Path) -> list[dict]:
+    """Only an explicit AMAZONQ_HISTORY file or directory. `~/.aws/amazonq` is not a transcript store."""
+    files: list[Path] = []
+    if _is_real_file(path):
+        files = [path]
+    elif _is_real_dir(path):
+        try:
+            for pattern in ("q-dev-chat-*.md", "q-dev-chat-*.html", "q-dev-chat-*.json"):
+                files.extend(p for p in path.glob(pattern) if _is_real_file(p))
+        except OSError:
+            return []
+    hits = []
+    seen: set[str] = set()
+    for item in files:
+        hit = _hit(
+            harness="amazonq", vendor_id=item.stem, path=item,
+            updated=_mtime(item), nbytes=item.stat().st_size,
+        )
+        if hit["id"] in seen:
+            continue
+        seen.add(hit["id"])
+        hits.append(hit)
+    return hits
+
+
+def _enum_dsh(root: Path) -> list[dict]:
+    """Count `session.v3.jsonl.zstd`. Do not decompress or descend into dependency trees."""
+    if not _is_real_dir(root):
+        return []
+    files: list[Path] = []
+    try:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [name for name in dirnames if name not in ("node_modules", ".git")]
+            if "session.v3.jsonl.zstd" in filenames:
+                path = Path(dirpath) / "session.v3.jsonl.zstd"
+                if _is_real_file(path):
+                    files.append(path)
+    except OSError:
+        return []
+    hits = []
+    seen: set[str] = set()
+    for path in files:
+        hit = _hit(
+            harness="dsh", vendor_id=path.parent.name, path=path,
+            updated=_mtime(path), nbytes=path.stat().st_size,
+        )
+        if hit["id"] in seen:
+            continue
+        seen.add(hit["id"])
+        hits.append(hit)
+    return hits
+
+
+def _store_present(path: Path | None) -> bool:
+    if path is None:
+        return False
+    return _is_real_dir(path) or _is_real_file(path)
+
+
+def _walk_report(homes: dict) -> tuple[list[dict], dict[str, str]]:
+    """One bad store is recorded and skipped. The other harnesses still return."""
     hits: list[dict] = []
+    failed: dict[str, str] = {}
     mapping = (
         ("grok", _enum_grok),
         ("claude", _enum_claude),
@@ -665,24 +1773,39 @@ def _walk(homes: dict) -> list[dict]:
         ("cursor", _enum_cursor),
         ("cowork", _enum_cowork),
         ("openwork", _enum_openwork),
+        ("hermes", _enum_hermes_home),
+        ("copilot", _enum_copilot),
+        ("pi", lambda root: _enum_loose_jsonl("pi", root)),
+        ("continue", _enum_continue),
+        ("aider", _enum_aider),
+        ("goose", _enum_goose),
+        ("amp", _enum_amp),
+        ("openhands", _enum_openhands),
+        ("crush", _enum_crush),
+        ("amazonq", _enum_amazonq),
+        ("dsh", _enum_dsh),
+        ("gemini", lambda root: _enum_chat_tmp("gemini", root)),
+        ("qwen", lambda root: _enum_chat_tmp("qwen", root)),
+        ("cline", _enum_cline),
+        ("kilo", _enum_kilo),
+        ("roo", _enum_roo),
+        ("claude_desktop", lambda root: _enum_loose_jsonl("claude_desktop", root)),
     )
     for name, fn in mapping:
         path = homes.get(name)
-        if path is None:
+        if not _store_present(path):
             continue
         try:
-            present = path.exists()
-        except OSError:
-            continue
-        if not present:
-            continue
-        hits.extend(fn(path))
-    desktop = homes.get("claude_desktop")
-    if desktop is not None and desktop.exists():
-        hits.extend(_enum_loose_jsonl("claude_desktop", desktop))
-    gemini = homes.get("gemini")
-    if gemini is not None and gemini.exists():
-        hits.extend(_enum_loose_jsonl("gemini", gemini))
+            hits.extend(fn(path))
+        except PageError as exc:
+            failed[name] = exc.kind
+        except (OSError, sqlite3.Error):
+            failed[name] = "UNREADABLE"
+    return hits, failed
+
+
+def _walk(homes: dict) -> list[dict]:
+    hits, _failed = _walk_report(homes)
     return hits
 
 
@@ -713,7 +1836,9 @@ def _enrich(rows: list[dict]) -> None:
         path = Path(row.get("path") or "")
         if path.suffix.lower() != ".jsonl" or not path.is_file():
             continue
-        cwd, title = _sniff(path, 2048)
+        cwd, title = _sniff(path, HEAD_BYTES)
+        if not title:
+            title = _first_user_title(path)
         if cwd and not row.get("cwd"):
             row["cwd"] = cwd
         if title:
@@ -724,10 +1849,100 @@ def _enrich(rows: list[dict]) -> None:
             row["cwd"] = ""
 
 
+def _drive_prefix(drive: str) -> str:
+    letter = str(drive or "").strip().upper()
+    if not letter:
+        return ""
+    if len(letter) == 1:
+        letter += ":"
+    return letter[:2] + "\\"
+
+
+def _on_drive(hit: dict, drive: str) -> bool:
+    prefix = _drive_prefix(drive)
+    if not prefix:
+        return True
+
+    def on(text: str) -> bool:
+        blob = str(text or "").replace("/", "\\").upper()
+        return blob.startswith(prefix)
+
+    if on(hit.get("path") or ""):
+        return True
+    # A legal row has a blank cwd on purpose. Do not match it through the project.
+    if hit.get("legal"):
+        return False
+    return on(hit.get("cwd") or "")
+
+
+_live_lock = threading.Lock()
+_live_rows: dict = {"key": None, "at": 0.0, "hits": [], "failed": {}}
+
+
+def _homes_key(homes: dict) -> tuple:
+    return tuple(
+        (name, None if homes.get(name) is None else str(homes[name]))
+        for name in HARNESSES
+    )
+
+
+def _live_key() -> tuple:
+    return _homes_key(default_homes())
+
+
+def _copy_hits(hits: list[dict]) -> list[dict]:
+    return [dict(hit) for hit in hits]
+
+
+def _live_load(homes: dict, fresh: bool = False) -> tuple[list[dict], dict[str, str]]:
+    """Always walk. Remember the live default rows so preview can look up an id.
+
+    The remembered rows never answer find. A session created after the last
+    find shows up on the next find. Caller-supplied homes are not remembered.
+    """
+    del fresh
+    hits, failed = _walk_report(homes)
+    if _homes_key(homes) == _live_key():
+        with _live_lock:
+            _live_rows["key"] = _homes_key(homes)
+            _live_rows["at"] = time.monotonic()
+            _live_rows["hits"] = hits
+            _live_rows["failed"] = dict(failed)
+    return _copy_hits(hits), dict(failed)
+
+
+def _live_lookup(homes: dict, rec_id: str) -> dict | None:
+    key = _homes_key(homes)
+    if key != _live_key():
+        return None
+    want = str(rec_id)
+    norm = _blob(want)
+    with _live_lock:
+        if _live_rows.get("key") != key:
+            return None
+        hits = list(_live_rows.get("hits") or [])
+    for hit in hits:
+        matched = hit["id"] == want or hit["vendor_id"] == want or _blob(hit.get("path") or "") == norm
+        aliases = hit.get("aliases") or {}
+        if not matched and aliases.get("opencode_id") != want:
+            continue
+        path = Path(hit.get("path") or "")
+        try:
+            if not path.exists():
+                return None
+        except OSError:
+            return None
+        return dict(hit)
+    return None
+
+
 def find(homes: dict | None = None, query: str = "", harness: str = "",
-         cwd: str = "", limit: int = DEFAULT_LIMIT, enrich: bool = True) -> dict:
+         cwd: str = "", limit: int = DEFAULT_LIMIT, enrich: bool = True,
+         drive: str = "", fresh: bool = False) -> dict:
     homes = homes if homes is not None else default_homes()
-    rows = [h for h in _walk(homes) if _match(h, query, harness, cwd)]
+    walked, failed = _live_load(homes, fresh=fresh)
+    pool = [h for h in walked if _match(h, query, "", cwd) and _on_drive(h, drive)]
+    rows = [h for h in pool if _match(h, "", harness, "")]
     rows.sort(key=lambda h: (-(h.get("updated") or 0), h["id"]))
     shown = rows[: max(0, int(limit))]
     if enrich:
@@ -735,15 +1950,27 @@ def find(homes: dict | None = None, query: str = "", harness: str = "",
     n_legal = sum(1 for h in rows if h["legal"])
     families = []
     for name in HARNESSES:
-        group = [h for h in rows if h["harness"] == name]
+        group = [h for h in pool if h["harness"] == name]
         path = homes.get(name)
-        present = bool(path and path.exists())
+        present = _store_present(path)
+        if name in failed:
+            status = failed[name]
+            count = None
+            n_family_legal = 0
+        elif present:
+            status = "OK"
+            count = len(group)
+            n_family_legal = sum(1 for h in group if h["legal"])
+        else:
+            status = "ABSENT"
+            count = None
+            n_family_legal = 0
         families.append({
             "family": name,
-            "status": "OK" if present else "ABSENT",
+            "status": status,
             "path": str(path) if path and present else None,
-            "n": len(group) if present else None,
-            "n_legal": sum(1 for h in group if h["legal"]) if present else 0,
+            "n": count,
+            "n_legal": n_family_legal,
         })
     return _result("find", "OK", {
         "n": len(rows),
@@ -765,6 +1992,9 @@ def _narrow_homes(homes: dict, rec_id: str) -> dict:
 
 
 def _by_id(homes: dict, rec_id: str) -> dict:
+    found = _live_lookup(homes, rec_id)
+    if found is not None:
+        return found
     homes = _narrow_homes(homes, rec_id)
     want = str(rec_id)
     norm = _blob(want)
@@ -872,6 +2102,41 @@ def _turns_from_rows(rows: list[dict], harness: str) -> list[dict]:
                 role = "meta"
             add(role, _text_of(payload.get("content")))
         return turns
+    if harness == "copilot":
+        role_of = {
+            "user.message": "user",
+            "assistant.message": "assistant",
+            "system.message": "system",
+            "tool.execution_start": "tool_call",
+        }
+        for obj in rows:
+            kind = str(obj.get("type") or "")
+            if kind not in role_of:
+                continue
+            data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+            text = data.get("content")
+            if text is None and kind == "tool.execution_start":
+                text = data.get("toolName") or ""
+            add(role_of[kind], _text_of(text), data.get("model") if isinstance(data.get("model"), str) else None)
+        return turns
+    if harness in _MESSAGE_HARNESSES:
+        role_of = {"user": "user", "assistant": "assistant", "system": "system"}
+        for obj in rows:
+            msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
+            kind = str(
+                obj.get("role")
+                or (msg.get("role") if isinstance(msg, dict) else "")
+                or obj.get("type")
+                or ""
+            )
+            if kind not in role_of and kind not in ("tool_result", "tool_use", "tool_call"):
+                continue
+            role = role_of.get(kind, "tool_call" if kind == "tool_use" else "tool_result")
+            content = msg.get("content") if isinstance(msg, dict) else obj.get("content")
+            if content is None and isinstance(msg, dict):
+                content = msg.get("text")
+            add(role, _text_of(content), msg.get("model") if isinstance(msg, dict) else None)
+        return turns
     return turns
 
 
@@ -881,6 +2146,7 @@ def _turns_cowork(hit: dict) -> tuple[list[dict], bool]:
     path = Path(hit["path"])
     if not path.is_file() or path.suffix.lower() not in (".md", ".txt", ".jsonl"):
         return [], False
+    _guard_size(path)
     if path.suffix.lower() == ".jsonl":
         rows, truncated = _read_jsonl(path)
         return _turns_from_rows(rows, "grok"), truncated
@@ -910,7 +2176,7 @@ def _turns_openwork(hit: dict) -> tuple[list[dict], bool]:
     db = Path(hit["path"])
     try:
         uri = db.resolve().as_uri() + "?mode=ro"
-        con = sqlite3.connect(uri, uri=True)
+        con = sqlite3.connect(uri, uri=True, timeout=1.0)
         msgs = list(con.execute(
             "SELECT data FROM message WHERE session_id=? ORDER BY time_created, id",
             (hit["vendor_id"],),
@@ -936,10 +2202,43 @@ def _turns_openwork(hit: dict) -> tuple[list[dict], bool]:
     return turns, False
 
 
-def load_record(hit: dict) -> dict:
-    if hit["legal"]:
+def _guard_size(path: Path) -> int:
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise PageError("NO_STORE", str(path)) from exc
+    if size > MAX_BYTES:
+        raise PageError("TOO_LARGE", str(path))
+    return size
+
+
+def _open_hit(hit: dict) -> dict:
+    """Refuse a legal transcript before any full read. Header sniff only."""
+    if hit.get("legal"):
         raise PageError("LEGAL_OMITTED", hit["id"])
+    path = Path(hit.get("path") or "")
+    if path.is_file() and path.suffix.lower() in (".jsonl", ".json", ".md", ".txt"):
+        cwd, title = _sniff(path, HEAD_BYTES)
+        if is_legal(str(path), hit.get("stream") or "", cwd or hit.get("cwd") or "", title or hit.get("title") or ""):
+            raise PageError("LEGAL_OMITTED", hit["id"])
+    return hit
+
+
+def _rows_from_json(obj: object) -> list[dict]:
+    if isinstance(obj, list):
+        return [item for item in obj if isinstance(item, dict)]
+    if isinstance(obj, dict):
+        inner = obj.get("history") or obj.get("messages") or obj.get("conversation")
+        if isinstance(inner, list):
+            return [item for item in inner if isinstance(item, dict)]
+    return []
+
+
+def load_record(hit: dict) -> dict:
+    hit = _open_hit(hit)
     path = Path(hit["path"])
+    if path.is_file():
+        _guard_size(path)
     truncated = False
     if hit["harness"] == "cowork":
         turns, truncated = _turns_cowork(hit)
@@ -950,6 +2249,17 @@ def load_record(hit: dict) -> dict:
     elif path.suffix.lower() == ".jsonl" and path.is_file():
         rows, truncated = _read_jsonl(path)
         turns = _turns_from_rows(rows, hit["harness"])
+        source_sha = sha256_bytes(path.read_bytes())
+    elif path.suffix.lower() == ".json" and path.is_file():
+        try:
+            obj = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise PageError("UNPARSEABLE", str(path)) from exc
+        rows = _rows_from_json(obj)
+        if not rows:
+            raise PageError("UNMEASURED", str(path))
+        turns = _turns_from_rows(rows, hit["harness"])
+        truncated = False
         source_sha = sha256_bytes(path.read_bytes())
     elif hit["harness"] == "cursor" and path.suffix.lower() == ".db":
         raise PageError("UNMEASURED", "cursor store.db has no transcript adapter in this plug")
@@ -1009,16 +2319,201 @@ def write_pair(out_dir: Path, stem: str, payload: bytes, source_sha: str, n_turn
     return {"jsonl": str(jsonl), "decl": str(decl), "sha": side["sha"], "len": side["len"], "n_turns": n_turns}
 
 
+def _speakable(turns: list[dict]) -> list[dict]:
+    """User and assistant lines. System prompts stay out of the preview pane."""
+    return [
+        turn for turn in turns
+        if turn.get("role") in ("user", "assistant") and (turn.get("text") or "").strip()
+    ]
+
+
+def _clip_turns(turns: list[dict], n: int, chars: int) -> list[dict]:
+    picked = _speakable(turns)
+    source = picked if picked else turns
+    shown = []
+    for turn in source[: max(0, n)]:
+        text = (turn.get("text") or "").strip()
+        if chars >= 0 and len(text) > chars:
+            text = text[:chars].rstrip() + "…"
+        shown.append({"seq": turn.get("seq"), "role": turn.get("role") or "meta", "text": text})
+    return shown
+
+
+def _preview_result(hit: dict, kind: str, n_turns: int | None, shown: list[dict]) -> dict:
+    return _result("preview", kind, {
+        "id": hit["id"], "n_turns": n_turns, "shown": len(shown), "turns": shown,
+    })
+
+
+def _jsonl_head_turns(path: Path, harness: str, n_want: int) -> tuple[list[dict], int | None, bool]:
+    """Read a short preview. A small file reports a real total. Nothing is hashed."""
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise PageError("NO_STORE", str(path)) from exc
+    if size <= PREVIEW_WHOLE:
+        rows, truncated = _read_jsonl(path)
+        parsed = _turns_from_rows(rows, harness)
+        return parsed, len(parsed), truncated
+    if n_want <= 0:
+        return [], None, False
+    collected: list[dict] = []
+    read = 0
+    budget = 2 * 1024 * 1024
+    stopped = False
+    bad = False
+    with path.open("rb") as handle:
+        for line in handle:
+            read += len(line)
+            piece = line.strip()
+            if piece:
+                try:
+                    obj = json.loads(piece.decode("utf-8", errors="replace"))
+                except ValueError:
+                    bad = True
+                    stopped = True
+                    break
+                if isinstance(obj, dict):
+                    collected.append(obj)
+            parsed = _turns_from_rows(collected, harness)
+            if len(_speakable(parsed)) >= n_want or read >= budget:
+                stopped = True
+                break
+    parsed = _turns_from_rows(collected, harness)
+    if bad or stopped:
+        return parsed, None, bad
+    return parsed, len(parsed), False
+
+
+def _message_turns(rows: list[tuple]) -> list[dict]:
+    turns = []
+    for (data,) in rows:
+        try:
+            obj = json.loads(data) if isinstance(data, str) else json.loads(data.decode("utf-8"))
+        except (ValueError, AttributeError):
+            obj = {"text": str(data)}
+        role = str(obj.get("role") or obj.get("type") or "meta")
+        if role not in ("user", "assistant", "system"):
+            role = "meta"
+        turns.append({
+            "seq": len(turns) + 1,
+            "role": role,
+            "text": _text_of(obj.get("content") if "content" in obj else obj.get("text")),
+            "model": obj.get("model"),
+        })
+    return turns
+
+
+def _preview_openwork(hit: dict, n_want: int, chars: int) -> dict:
+    if str(hit["vendor_id"]).startswith("ses_cow_"):
+        raise PageError("DO_NOT_REINGEST", hit["id"])
+    db = Path(hit["path"])
+    try:
+        uri = db.resolve().as_uri() + "?mode=ro"
+        con = sqlite3.connect(uri, uri=True, timeout=1.0)
+        total = con.execute(
+            "SELECT COUNT(*) FROM message WHERE session_id=?",
+            (hit["vendor_id"],),
+        ).fetchone()
+        n_turns = int(total[0]) if total else 0
+        msgs = list(con.execute(
+            "SELECT data FROM message WHERE session_id=? ORDER BY time_created, id LIMIT ?",
+            (hit["vendor_id"], int(max(0, n_want))),
+        ))
+        con.close()
+    except sqlite3.Error as exc:
+        raise PageError("SCHEMA_UNKNOWN", str(exc))
+    shown = _clip_turns(_message_turns(msgs), n_want, chars)
+    return _preview_result(hit, "OK", n_turns, shown)
+
+
+def _preview_cowork(hit: dict, n_want: int, chars: int) -> dict:
+    path = Path(hit["path"])
+    if path.suffix.lower() == ".jsonl":
+        parsed, n_turns, truncated = _jsonl_head_turns(path, "grok", n_want)
+        kind = "TRUNCATED" if truncated else "OK"
+        return _preview_result(hit, kind, n_turns, _clip_turns(parsed, n_want, chars))
+    size = _guard_size(path)
+    if path.suffix.lower() not in (".md", ".txt"):
+        raise PageError("UNMEASURED", hit["path"])
+    if size <= PREVIEW_WHOLE:
+        turns, truncated = _turns_cowork(hit)
+        kind = "TRUNCATED" if truncated else "OK"
+        return _preview_result(hit, kind, len(turns), _clip_turns(turns, n_want, chars))
+    with path.open("rb") as handle:
+        text = handle.read(PREVIEW_WHOLE).decode("utf-8", errors="replace")
+    turns, _truncated = _md_turns(text), False
+    return _preview_result(hit, "OK", None, _clip_turns(turns, n_want, chars))
+
+
+def _md_turns(text: str) -> list[dict]:
+    chunks = re.split(r"\n(?=## \[\d+\] )", text)
+    turns = []
+    if len(chunks) > 1:
+        for chunk in chunks:
+            match = re.match(r"## \[(\d+)\]\s+(\w+)", chunk)
+            if not match:
+                continue
+            role = match.group(2).lower()
+            if role not in ("user", "assistant", "system"):
+                role = "meta"
+            body = chunk.split("\n", 1)[1] if "\n" in chunk else ""
+            turns.append({"seq": len(turns) + 1, "role": role, "text": body.strip(), "model": None})
+        return turns
+    return [{"seq": 1, "role": "user", "text": text, "model": None}]
+
+
+def preview(rec_id: str, homes: dict | None = None, turns: int = 6, chars: int = 400) -> dict:
+    """A short read of one session. Legal rows are refused. Nothing is written."""
+    homes = homes if homes is not None else default_homes()
+    hit = _open_hit(_by_id(homes, rec_id))
+    path = Path(hit["path"])
+    n_want = max(0, int(turns))
+    limit = max(0, int(chars))
+    if hit["harness"] == "openwork":
+        return _preview_openwork(hit, n_want, limit)
+    if hit["harness"] == "cowork":
+        return _preview_cowork(hit, n_want, limit)
+    if path.suffix.lower() == ".jsonl" and path.is_file():
+        parsed, n_turns, truncated = _jsonl_head_turns(path, hit["harness"], n_want)
+        kind = "TRUNCATED" if truncated else "OK"
+        return _preview_result(hit, kind, n_turns, _clip_turns(parsed, n_want, limit))
+    if path.suffix.lower() == ".json" and path.is_file():
+        _guard_size(path)
+        try:
+            obj = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise PageError("UNPARSEABLE", str(path)) from exc
+        rows = _rows_from_json(obj)
+        if not rows:
+            raise PageError("UNMEASURED", str(path))
+        parsed = _turns_from_rows(rows, hit["harness"])
+        return _preview_result(hit, "OK", len(parsed), _clip_turns(parsed, n_want, limit))
+    if hit["harness"] == "cursor" and path.suffix.lower() == ".db":
+        raise PageError("UNMEASURED", "cursor store.db has no transcript adapter in this plug")
+    raise PageError("UNMEASURED", hit["path"])
+
+
+def _source_hash(path: Path) -> str:
+    if not path.is_file():
+        return ""
+    return sha256_bytes(path.read_bytes())
+
+
+def _same_source(path: Path, before: str) -> None:
+    if before and _source_hash(path) != before:
+        raise PageError("FIDELITY_MISMATCH", "source changed during read")
+
+
 def import_session(rec_id: str, out_dir: Path, homes: dict | None = None) -> dict:
     homes = homes if homes is not None else default_homes()
-    hit = _by_id(homes, rec_id)
-    before = sha256_bytes(Path(hit["path"]).read_bytes()) if Path(hit["path"]).is_file() else ""
+    hit = _open_hit(_by_id(homes, rec_id))
+    source = Path(hit["path"])
+    before = _source_hash(source)
     loaded = load_record(hit)
+    _same_source(source, before)
     payload = encode_transcript(loaded["head"], loaded["turns"])
     written = write_pair(out_dir, hit["id"], payload, loaded["source_sha"], len(loaded["turns"]))
-    after = sha256_bytes(Path(hit["path"]).read_bytes()) if Path(hit["path"]).is_file() and before else before
-    if before and after != before:
-        raise PageError("FIDELITY_MISMATCH", "source changed during import")
     kind = "TRUNCATED" if loaded["truncated"] else "OK"
     return _result("import", kind, {
         "id": hit["id"], "n_turns": len(loaded["turns"]),
@@ -1028,10 +2523,11 @@ def import_session(rec_id: str, out_dir: Path, homes: dict | None = None) -> dic
 
 def export_md(rec_id: str, out_dir: Path, homes: dict | None = None) -> dict:
     homes = homes if homes is not None else default_homes()
-    hit = _by_id(homes, rec_id)
+    hit = _open_hit(_by_id(homes, rec_id))
     source = Path(hit["path"])
-    before = sha256_bytes(source.read_bytes()) if source.is_file() else ""
+    before = _source_hash(source)
     loaded = load_record(hit)
+    _same_source(source, before)
     lines = [f"# {loaded['head'].get('title') or hit['id']}", "",
              f"harness: {hit['harness']}", f"id: {hit['id']}", ""]
     for turn in loaded["turns"]:
@@ -1041,10 +2537,8 @@ def export_md(rec_id: str, out_dir: Path, homes: dict | None = None) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     dest = out_dir / f"{hit['id']}.md"
     dest.write_text("\n".join(lines), encoding="utf-8")
-    after = sha256_bytes(source.read_bytes()) if source.is_file() and before else before
-    if before and after != before:
-        raise PageError("FIDELITY_MISMATCH", "source changed during export")
-    return _result("export", "OK", {
+    kind = "TRUNCATED" if loaded["truncated"] else "OK"
+    return _result("export", kind, {
         "id": hit["id"], "out": str(dest), "out_sha": sha256_bytes(dest.read_bytes()),
         "source_sha": before, "n_turns": len(loaded["turns"]),
     }, original_untouched=True)
@@ -1079,49 +2573,75 @@ def build_index(out_path: Path | None = None, homes: dict | None = None,
     }, legal_omitted=found["legal_omitted"])
 
 
-def _jsonl_ok(path: Path) -> bool:
+def _jsonl_state(path: Path) -> tuple[str, str]:
     try:
         raw = path.read_bytes()
-    except OSError:
-        return False
-    if not raw:
-        return True
+    except OSError as exc:
+        return "busy", str(exc)
+    if not raw.strip():
+        return "damage", "empty"
     for line in raw.splitlines():
         if not line.strip():
             continue
         try:
             json.loads(line.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
-            return False
-    # a trailing partial line without newline still fails json.loads above
-    return True
+            return "damage", "jsonl"
+    return "ok", "jsonl"
 
 
-def _swap_in(incoming: Path, target: Path) -> None:
-    """Replace target with incoming. Windows can deny the rename while a
-    scanner holds the destination; the verified bytes are then written over it.
-    """
+def _jsonl_ok(path: Path) -> bool:
+    return _jsonl_state(path)[0] == "ok"
+
+
+def _sqlite_state(path: Path) -> tuple[str, str]:
     try:
-        os.replace(incoming, target)
-        return
-    except PermissionError:
-        data = incoming.read_bytes()
-        target.write_bytes(data)
-        incoming.unlink(missing_ok=True)
+        uri = path.resolve().as_uri() + "?mode=ro"
+        con = sqlite3.connect(uri, uri=True, timeout=1.0)
+        integ = con.execute("PRAGMA integrity_check").fetchone()[0]
+        con.close()
+        del con
+        gc.collect()
+    except sqlite3.Error as exc:
+        text = str(exc).lower()
+        if "locked" in text or "busy" in text or "unable to open" in text or "disk i/o" in text:
+            return "busy", str(exc)
+        return "damage", str(exc)
+    if integ != "ok":
+        return "damage", f"integrity={integ}"
+    return "ok", "ok"
 
 
 def _sqlite_ok(path: Path) -> tuple[bool, str]:
-    try:
-        uri = path.resolve().as_uri() + "?mode=ro"
-        con = sqlite3.connect(uri, uri=True)
-        integ = con.execute("PRAGMA integrity_check").fetchone()[0]
-        fk = con.execute("PRAGMA foreign_key_check").fetchall()
-        con.close()
-    except sqlite3.Error as exc:
-        return False, str(exc)
-    if integ != "ok" or fk:
-        return False, f"integrity={integ} fk={len(fk)}"
-    return True, "ok"
+    state, detail = _sqlite_state(path)
+    return state == "ok", detail
+
+
+def _file_state(path: Path, sqlite_target: bool) -> tuple[str, str]:
+    if sqlite_target:
+        return _sqlite_state(path)
+    return _jsonl_state(path)
+
+
+_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+
+
+def _park_sidecars(target: Path, stage_dir: Path) -> list[tuple[Path, Path]]:
+    parked = []
+    for suffix in _SIDECAR_SUFFIXES:
+        side = Path(str(target) + suffix)
+        if not side.is_file() or side.is_symlink():
+            continue
+        dest = stage_dir / side.name
+        os.replace(side, dest)
+        parked.append((side, dest))
+    return parked
+
+
+def _unpark_sidecars(parked: list[tuple[Path, Path]]) -> None:
+    for original, staged in reversed(parked):
+        if staged.is_file():
+            os.replace(staged, original)
 
 
 def recover(target: Path, bak: Path | None = None, stage: Path | None = None,
@@ -1129,26 +2649,37 @@ def recover(target: Path, bak: Path | None = None, stage: Path | None = None,
     """Check, then replace from a verified bak. Never edits the broken bytes in place."""
     if not target.exists():
         raise PageError("NO_STORE", str(target))
+    if is_legal(str(target)):
+        raise PageError("LEGAL_OMITTED", str(target))
     suffix = target.suffix.lower()
     sqlite_target = suffix in (".db", ".sqlite")
-    if sqlite_target:
-        ok, detail = _sqlite_ok(target)
-    elif suffix == ".jsonl":
-        ok, detail = _jsonl_ok(target), "jsonl"
-    else:
+    if suffix == ".jsonl":
+        cwd, title = _sniff(target, HEAD_BYTES)
+        if is_legal(str(target), "", cwd, title):
+            raise PageError("LEGAL_OMITTED", str(target))
+    elif not sqlite_target:
         raise PageError("UNMEASURED", suffix or target.name)
-    if ok:
+    state, detail = _file_state(target, sqlite_target)
+    if state == "busy":
+        return _result("recover", "BUSY", {"target": str(target), "detail": detail})
+    if state == "ok":
         return _result("recover", "ALREADY_OK", {"target": str(target), "detail": detail})
-    if bak is None:
-        bak = nearest_bak(target)
-    if bak is None or not bak.is_file():
+    candidates = [bak] if bak is not None else _bak_candidates(target)
+    chosen: Path | None = None
+    bak_detail = detail
+    for cand in candidates:
+        if cand is None or not cand.is_file():
+            continue
+        cand_state, cand_detail = _file_state(cand, sqlite_target)
+        if cand_state == "ok":
+            chosen = cand
+            break
+        bak_detail = cand_detail
+    if chosen is None:
+        if any(cand is not None and cand.is_file() for cand in candidates):
+            raise PageError("BAD_BAK", bak_detail)
         return _result("recover", "NO_BAK", {"target": str(target), "detail": detail})
-    if sqlite_target:
-        bak_ok, bak_detail = _sqlite_ok(bak)
-    else:
-        bak_ok, bak_detail = _jsonl_ok(bak), "jsonl"
-    if not bak_ok:
-        raise PageError("BAD_BAK", bak_detail)
+    bak = chosen
     bak_sha = sha256_bytes(bak.read_bytes())
     if not apply:
         return _result("recover", "DRY_RUN", {
@@ -1159,22 +2690,41 @@ def recover(target: Path, bak: Path | None = None, stage: Path | None = None,
     staged.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(target, staged)
     staged_sha = sha256_bytes(staged.read_bytes())
+    parked: list[tuple[Path, Path]] = []
     incoming = target.with_name(target.name + ".restore")
-    shutil.copy2(bak, incoming)
-    restored = sha256_bytes(incoming.read_bytes())
-    if restored != bak_sha:
+    try:
+        if sqlite_target:
+            parked = _park_sidecars(target, staged.parent)
+        shutil.copy2(bak, incoming)
+        restored = sha256_bytes(incoming.read_bytes())
+        if restored != bak_sha:
+            raise PageError("RESTORE_FAILED", str(staged))
+        last_exc: OSError | None = None
+        for _try in range(10):
+            try:
+                os.replace(incoming, target)
+                last_exc = None
+                break
+            except PermissionError as exc:
+                last_exc = exc
+                time.sleep(0.05)
+        if last_exc is not None:
+            raise PageError("RESTORE_FAILED", str(staged)) from last_exc
+        again, again_detail = _file_state(target, sqlite_target)
+        if again != "ok":
+            rollback = target.with_name(target.name + ".rollback")
+            shutil.copy2(staged, rollback)
+            os.replace(rollback, target)
+            _unpark_sidecars(parked)
+            raise PageError("RESTORE_FAILED", again_detail)
+    except Exception:
         incoming.unlink(missing_ok=True)
-        raise PageError("RESTORE_FAILED", str(target))
-    _swap_in(incoming, target)
-    if sqlite_target:
-        again, again_detail = _sqlite_ok(target)
-    else:
-        again, again_detail = _jsonl_ok(target), "jsonl"
-    if not again:
-        back = target.with_name(target.name + ".restore")
-        shutil.copy2(staged, back)
-        _swap_in(back, target)
-        raise PageError("RESTORE_FAILED", again_detail)
+        if parked:
+            try:
+                _unpark_sidecars(parked)
+            except OSError:
+                pass
+        raise
     return _result("recover", "OK", {
         "target": str(target), "bak_path": str(bak), "bak_sha": bak_sha,
         "staged_path": str(staged), "staged_sha": staged_sha, "restored_sha": restored,
@@ -1194,9 +2744,7 @@ def _which(names: list[str], extra: list[Path]) -> str | None:
 
 def resume(rec_id: str, homes: dict | None = None, launch: bool = False) -> dict:
     homes = homes if homes is not None else default_homes()
-    hit = _by_id(homes, rec_id)
-    if hit["legal"]:
-        raise PageError("LEGAL_OMITTED", hit["id"])
+    hit = _open_hit(_by_id(homes, rec_id))
     harness = hit["harness"]
     vid = hit["vendor_id"]
     cwd = hit.get("cwd") or ""
@@ -1213,6 +2761,27 @@ def resume(rec_id: str, homes: dict | None = None, launch: bool = False) -> dict
     elif harness == "cursor":
         argv = ["agent", "--resume", vid]
         binary = _which(["agent", "cursor-agent"], [])
+    elif harness == "pi":
+        argv = ["pi", "--session", str(hit["path"])]
+        binary = _which(["pi"], [])
+    elif harness == "hermes":
+        argv = ["hermes", "--resume", vid]
+        binary = _which(["hermes"], [])
+    elif harness == "cline" and str(hit["path"]).endswith(".messages.json"):
+        argv = ["cline", "--id", vid]
+        binary = _which(["cline"], [])
+    elif harness == "goose":
+        argv = ["goose", "session", "--resume", "--session-id", vid]
+        binary = _which(["goose"], [])
+    elif harness == "qwen":
+        argv = ["qwen", "--resume", vid]
+        binary = _which(["qwen"], [])
+    elif harness == "copilot":
+        argv = ["copilot", f"--resume={vid}"]
+        binary = _which(["copilot"], [])
+    elif harness == "crush":
+        argv = ["crush", "--session", vid]
+        binary = _which(["crush"], [])
     elif harness in ("openwork", "cowork"):
         opencode = (hit.get("aliases") or {}).get("opencode_id") or vid
         return _result("resume", "OPENWORK_FOCUS", {
@@ -1265,10 +2834,11 @@ def _strip_text(text: str) -> str:
 
 def anonymize(rec_id: str, out_dir: Path, homes: dict | None = None) -> dict:
     homes = homes if homes is not None else default_homes()
-    hit = _by_id(homes, rec_id)
+    hit = _open_hit(_by_id(homes, rec_id))
     source = Path(hit["path"])
-    before = sha256_bytes(source.read_bytes()) if source.is_file() else ""
+    before = _source_hash(source)
     loaded = load_record(hit)
+    _same_source(source, before)
     n = 0
     cleaned = []
     for turn in loaded["turns"]:
@@ -1280,19 +2850,15 @@ def anonymize(rec_id: str, out_dir: Path, homes: dict | None = None) -> dict:
         cleaned.append(row)
     payload = encode_transcript(loaded["head"], cleaned)
     written = write_pair(out_dir, hit["id"] + ".anon", payload, loaded["source_sha"], len(cleaned), anonymized=True)
-    after = sha256_bytes(source.read_bytes()) if source.is_file() and before else before
-    if before and after != before:
-        raise PageError("FIDELITY_MISMATCH", "original changed")
-    return _result("anonymize", "OK", {
+    kind = "TRUNCATED" if loaded["truncated"] else "OK"
+    return _result("anonymize", kind, {
         "n_redactions": n, "source_sha": before, "out_sha": written["sha"], "id": hit["id"],
     }, written=written, original_untouched=True)
 
 
 def strip(rec_id: str, out_dir: Path | None, homes: dict | None = None, dry: bool = False) -> dict:
     homes = homes if homes is not None else default_homes()
-    hit = _by_id(homes, rec_id)
-    if hit["legal"]:
-        raise PageError("LEGAL_OMITTED", hit["id"])
+    hit = _open_hit(_by_id(homes, rec_id))
     loaded = load_record(hit)
     kept = []
     dropped = 0
@@ -1310,14 +2876,15 @@ def strip(rec_id: str, out_dir: Path | None, homes: dict | None = None, dry: boo
         row["seq"] = len(kept) + 1
         kept.append(row)
     gate = {"id": hit["id"], "kept": len(kept), "dropped_markers": dropped, "dry": dry}
+    kind = "TRUNCATED" if loaded["truncated"] else "OK"
     if dry:
-        return _result("strip_dry", "OK", gate)
+        return _result("strip_dry", kind, gate)
     if out_dir is None:
         raise PageError("NO_OUTDIR", "strip needs an output directory")
     payload = encode_transcript(loaded["head"], kept)
     written = write_pair(out_dir, hit["id"] + ".strip", payload, loaded["source_sha"], len(kept))
     gate["out_sha"] = written["sha"]
-    return _result("strip", "OK", gate, written=written, original_untouched=True)
+    return _result("strip", kind, gate, written=written, original_untouched=True)
 
 
 def _result(verb: str, kind: str, gate: dict, legal_omitted: int = 0, **extra) -> dict:
@@ -1343,12 +2910,12 @@ def _homes_from_body(body: dict, homes: dict | None) -> dict:
     return base
 
 
-def nearest_bak(target: Path) -> Path | None:
-    """A sibling backup only. Never a volume-wide search."""
+def _bak_candidates(target: Path) -> list[Path]:
+    """Sibling backups only, newest first. Never a volume-wide search."""
     try:
         children = list(target.parent.iterdir())
     except OSError:
-        return None
+        return []
     found = []
     try:
         target_res = target.resolve()
@@ -1366,6 +2933,11 @@ def nearest_bak(target: Path) -> Path | None:
         if name.startswith(target.name) and ".bak" in name:
             found.append(child)
     found.sort(key=_mtime, reverse=True)
+    return found
+
+
+def nearest_bak(target: Path) -> Path | None:
+    found = _bak_candidates(target)
     return found[0] if found else None
 
 
@@ -1511,12 +3083,22 @@ def dispatch(action: str, body: dict | None = None, homes: dict | None = None) -
         return _result("doi", "UNPROVEN", {"detail": "citation existence is not fetched"})
     if action not in VERBS:
         raise PageError("BAD_ACTION", action or "(empty)")
+    if action == "preview":
+        rec_id = str(body.get("id") or "")
+        if not rec_id:
+            raise PageError("NOT_FOUND", "id is required")
+        return preview(rec_id, homes=homes if homes is not None else _homes_for(body))
     if action == "find":
+        flag = body.get("fresh", False)
+        if not isinstance(flag, bool):
+            raise PageError("BAD_INPUT", "fresh must be boolean")
         return find(
             homes=homes, query=str(body.get("query") or body.get("q") or ""),
             harness=str(body.get("harness") or body.get("family") or ""),
             cwd=str(body.get("cwd") or ""),
             limit=int(body.get("limit") or DEFAULT_LIMIT),
+            drive=str(body.get("drive") or ""),
+            fresh=flag,
         )
     if action == "scan":
         store = body.get("store") or body.get("path")
