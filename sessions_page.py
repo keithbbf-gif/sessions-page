@@ -287,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
             out = Path(args.out) if args.out else None
             return _print(engine.build_index(out))
         if args.cmd == "recover":
-            bak = Path(args.bak) if args.bak else engine.nearest_bak(Path(args.target))
+            bak = Path(args.bak) if args.bak else None
             return _print(engine.recover(Path(args.target), bak, apply=args.apply))
         if args.cmd == "resume":
             return _print(engine.resume(args.id, launch=args.launch))

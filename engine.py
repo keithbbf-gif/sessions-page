@@ -2937,6 +2937,7 @@ def _bak_candidates(target: Path) -> list[Path]:
 
 
 def nearest_bak(target: Path) -> Path | None:
+    """Newest sibling backup. It is not checked; recover chooses a good one."""
     found = _bak_candidates(target)
     return found[0] if found else None
 
@@ -3137,7 +3138,9 @@ def dispatch(action: str, body: dict | None = None, homes: dict | None = None) -
         if not target:
             raise PageError("NO_STORE", "recover needs a target")
         target_path = Path(target)
-        bak = Path(body["bak"]) if body.get("bak") else nearest_bak(target_path)
+        # A named bak is the only candidate. Otherwise recover walks siblings
+        # and keeps the newest file that still checks out.
+        bak = Path(body["bak"]) if body.get("bak") else None
         stage = Path(body["stage"]) if body.get("stage") else None
         flag = body.get("apply", False)
         if not isinstance(flag, bool):
