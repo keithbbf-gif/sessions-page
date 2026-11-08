@@ -17,14 +17,18 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 SCHEMA = "cosmos-session-tools-result/1"
 TRANSCRIPT = "cosmos-transcript/1"
 INDEX_SCHEMA = "sessions-page-index/1"
 MAX_BYTES = 48 * 1024 * 1024
+SESSION_CAP = 2000
+SUMMARY_CAP = 4000
 HEAD_BYTES = 8192
 PREVIEW_WHOLE = 512 * 1024
 DEFAULT_LIMIT = 200
@@ -32,7 +36,7 @@ DEFAULT_LIMIT = 200
 VERBS = (
     "find", "preview", "import", "export", "index", "recover", "resume",
     "scan", "load", "convert", "diff", "check", "anonymize",
-    "crash-recover", "strip", "strip_dry", "doi",
+    "crash-recover", "strip", "strip_dry", "doi", "formats",
 )
 
 HARNESSES = (
@@ -41,6 +45,7 @@ HARNESSES = (
     "hermes", "cline", "kilo", "roo", "pi", "copilot", "continue",
     "aider", "goose", "qwen", "amp", "openhands", "crush", "amazonq",
     "dsh", "factory", "windsurf", "augment",
+    "agy", "antigravity", "antigravity-ide", "antigravity-cli",
 )
 
 _ILLEGAL = ':*?"<>|\\/'
@@ -102,7 +107,16 @@ PREFIX = {
     "factory": "fac",
     "windsurf": "wnd",
     "augment": "aug",
+    "agy": "agy",
+    "antigravity": "agv",
+    "antigravity-ide": "agi",
+    "antigravity-cli": "agc",
 }
+_SQL_SUFFIXES = (".db", ".sqlite", ".vscdb")
+_DB_HARNESSES = frozenset({
+    "openwork", "hermes", "antigravity", "antigravity-ide", "antigravity-cli",
+})
+_ANTIGRAVITY = ("antigravity", "antigravity-ide", "antigravity-cli")
 _EDITORS = (
     "Code", "Code - Insiders", "Cursor", "Windsurf", "VSCodium", "Cline", "Kilo",
 )
@@ -141,6 +155,8 @@ def is_legal(path: str = "", stream: str = "", cwd: str = "", title: str = "") -
 
 
 def product_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
 
 
@@ -500,6 +516,10 @@ def default_homes() -> dict[str, Path | None]:
         "factory": None,
         "windsurf": None,
         "augment": None,
+        "agy": None,
+        "antigravity": home / ".gemini" / "antigravity",
+        "antigravity-ide": home / ".gemini" / "antigravity-ide",
+        "antigravity-cli": home / ".gemini" / "antigravity-cli",
     }
 
 
@@ -573,6 +593,58 @@ def _win_kernel():
         return kernel
 
 
+def _volume_fields(kernel, root: str) -> dict:
+    import ctypes
+    label = ctypes.create_unicode_buffer(261)
+    fs = ctypes.create_unicode_buffer(32)
+    serial = ctypes.c_uint32()
+    maxcl = ctypes.c_uint32()
+    flags = ctypes.c_uint32()
+    named = bool(kernel.GetVolumeInformationW(
+        root, label, 261, ctypes.byref(serial), ctypes.byref(maxcl),
+        ctypes.byref(flags), fs, 32,
+    ))
+    free = ctypes.c_ulonglong()
+    total = ctypes.c_ulonglong()
+    avail = ctypes.c_ulonglong()
+    sized = bool(kernel.GetDiskFreeSpaceExW(
+        root, ctypes.byref(avail), ctypes.byref(total), ctypes.byref(free),
+    ))
+    return {
+        "label": label.value if named else "",
+        "fs": fs.value if named else "",
+        "total": int(total.value) if sized else None,
+        "free": int(free.value) if sized else None,
+        "ready": named or sized,
+    }
+
+
+def _volume_row_timed(kernel, root: str, letter: str, kind: str, wait: float = 0.35) -> dict:
+    box: dict = {}
+
+    def run() -> None:
+        try:
+            box["row"] = _volume_fields(kernel, root)
+        except OSError:
+            box["row"] = None
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    # Join only for the short wait. A stuck tray does not hold the caller.
+    worker.join(wait)
+    got = box.get("row")
+    if not isinstance(got, dict):
+        return {
+            "id": letter, "path": root, "label": "", "kind": kind, "fs": "",
+            "total": None, "free": None, "ready": False,
+        }
+    return {
+        "id": letter, "path": root, "label": got["label"], "kind": kind,
+        "fs": got["fs"], "total": got["total"], "free": got["free"],
+        "ready": got["ready"],
+    }
+
+
 def list_drives() -> list[dict]:
     """Volume letters and labels only. Does not walk the files on the drive."""
     if os.name != "nt":
@@ -603,11 +675,11 @@ def list_drives() -> list[dict]:
             kind_n = int(kernel.GetDriveTypeW(root))
             kind = _DRIVE_KIND.get(kind_n, "unknown")
             letter = root[:2].upper()
-            if kind not in ("fixed", "ramdisk", "removable"):
-                rows.append({
-                    "id": letter, "path": root, "label": "", "kind": kind, "fs": "",
-                    "total": None, "free": None, "ready": False,
-                })
+            # Fixed disks answer immediately. A removable tray, a CD drive, or a
+            # dead network root can block GetVolumeInformationW for a long time.
+            # Those get a short wait and then stay NOT READY with no bar.
+            if kind not in ("fixed", "ramdisk"):
+                rows.append(_volume_row_timed(kernel, root, letter, kind))
                 continue
             label = ctypes.create_unicode_buffer(261)
             fs = ctypes.create_unicode_buffer(32)
@@ -830,19 +902,24 @@ def _sniff(path: Path, n: int = 1024) -> tuple[str, str]:
 
 def _claude_meta(path: Path) -> tuple[str, str]:
     cwd, title = _sniff(path, 2048)
-    if cwd and title:
-        return cwd, title
+    ai = ""
     for obj in _head_lines(path):
         if not cwd and isinstance(obj.get("cwd"), str):
             cwd = obj["cwd"]
         kind = str(obj.get("type") or "")
-        if kind in ("custom-title", "ai-title") and not title:
-            title = _one_line(obj.get("customTitle") or obj.get("title") or obj.get("summary") or "")
+        if kind in ("custom-title", "ai-title"):
+            # aiTitle is the local automatic name and wins over the first user line.
+            if not ai and isinstance(obj.get("aiTitle"), str):
+                ai = _one_line(obj["aiTitle"])
+            if not title:
+                title = _one_line(obj.get("customTitle") or obj.get("title") or obj.get("summary") or "")
         if kind == "user" and not title:
             msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
             title = _one_line(_text_of(msg.get("content") if isinstance(msg, dict) else ""))
-        if cwd and title:
+        if cwd and ai:
             break
+    if ai:
+        title = ai
     return cwd, title
 
 
@@ -940,26 +1017,13 @@ def _enum_claude(root: Path) -> list[dict]:
     except OSError:
         return hits
     for project in projects:
+        if "claude-probe" in project.name:
+            continue
         _consume_claude_dir(project, hits)
     return hits
 
 
-def _enum_codex(root: Path) -> list[dict]:
-    if root.is_file() and root.suffix == ".sqlite":
-        return _enum_codex_db(root)
-    if not root.is_dir():
-        return []
-    db = None
-    try:
-        for child in root.iterdir():
-            if re.fullmatch(r"state_(\d+)\.sqlite", child.name) and child.is_file():
-                db = child
-    except OSError:
-        db = None
-    if db is not None:
-        rows = _enum_codex_db(db)
-        if rows:
-            return rows
+def _enum_codex_files(root: Path) -> list[dict]:
     hits = []
     try:
         paths = root.rglob("rollout-*.jsonl")
@@ -976,6 +1040,120 @@ def _enum_codex(root: Path) -> list[dict]:
             harness="codex", vendor_id=match.group(1), path=path, cwd=cwd, title=title,
             updated=_mtime(path), nbytes=path.stat().st_size,
         ))
+    return hits
+
+
+def _codex_rollout_index(root: Path) -> dict[str, Path]:
+    """One walk of sessions/. Archived path parts are skipped. Keyed by the filename uuid.
+
+    The Codex home also holds the sqlite db and other large trees. Do not rglob it.
+    """
+    sessions = root / "sessions"
+    try:
+        if not sessions.is_dir():
+            return {}
+    except OSError:
+        return {}
+    found: dict[str, Path] = {}
+    patterns = ("rollout-*.jsonl", "rollout-*.jsonl.zst")
+    for pattern in patterns:
+        try:
+            paths = sessions.rglob(pattern)
+        except OSError:
+            continue
+        for path in paths:
+            if "archived" in {part.lower() for part in path.parts}:
+                continue
+            name = path.name
+            if name.lower().endswith(".jsonl.zst"):
+                name = name[:-4]
+            match = _ROLLOUT.match(name)
+            if not match:
+                continue
+            # A plain jsonl wins over the compressed sibling.
+            key = match.group(1).lower()
+            current = found.get(key)
+            if current is None:
+                found[key] = path
+            elif current.name.lower().endswith(".jsonl.zst") and not path.name.lower().endswith(".jsonl.zst"):
+                found[key] = path
+    return found
+
+
+def _codex_row_uuids(hit: dict) -> list[str]:
+    keys = []
+    match = _ROLLOUT.match(Path(hit.get("path") or "").name)
+    if match:
+        keys.append(match.group(1).lower())
+    vid = str(hit.get("vendor_id") or "")
+    if _UUID.fullmatch(vid):
+        low = vid.lower()
+        if low not in keys:
+            keys.append(low)
+    return keys
+
+
+def _enum_codex(root: Path) -> list[dict]:
+    if root.is_file() and root.suffix == ".sqlite":
+        return _enum_codex_db(root)
+    if not root.is_dir():
+        return []
+    db = None
+    try:
+        for child in root.iterdir():
+            if re.fullmatch(r"state_(\d+)\.sqlite", child.name) and child.is_file():
+                db = child
+    except OSError:
+        db = None
+    rows = _enum_codex_db(db) if db is not None else []
+    if not rows:
+        return _enum_codex_files(root)
+    files = _codex_rollout_index(root)
+    seen: set[str] = set()
+    hits = []
+    for hit in rows:
+        keys = _codex_row_uuids(hit)
+        seen.update(keys)
+        path = Path(hit["path"])
+        try:
+            on_disk = path.is_file()
+        except OSError:
+            on_disk = False
+        if not on_disk:
+            zst = Path(str(path) + ".zst")
+            try:
+                zst_ok = zst.is_file()
+            except OSError:
+                zst_ok = False
+            found = zst if zst_ok else None
+            if found is None:
+                for key in keys:
+                    found = files.get(key)
+                    if found is not None:
+                        break
+            if found is not None:
+                hit["path"] = str(found)
+                try:
+                    hit["bytes"] = found.stat().st_size
+                except OSError:
+                    hit["bytes"] = None
+        hits.append(hit)
+    for key, path in files.items():
+        if key in seen:
+            continue
+        match = _ROLLOUT.match(path.name)
+        if not match:
+            continue
+        cwd, title = _sniff(path)
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        hits.append(_hit(
+            harness="codex", vendor_id=match.group(1), path=path, cwd=cwd, title=title,
+            updated=_mtime(path), nbytes=size,
+        ))
+        seen.add(key)
     return hits
 
 
@@ -1177,10 +1355,21 @@ def _enum_openwork(store: Path) -> list[dict]:
     try:
         uri = db.resolve().as_uri() + "?mode=ro"
         con = sqlite3.connect(uri, uri=True, timeout=1.0)
-        rows = list(con.execute("SELECT id, title, directory FROM session"))
-        con.close()
     except sqlite3.Error as exc:
-        raise PageError("SCHEMA_UNKNOWN", str(exc))
+        raise PageError("SCHEMA_UNKNOWN", str(exc)) from exc
+    try:
+        cols = {row[1] for row in con.execute("PRAGMA table_info(session)")}
+        if "id" not in cols:
+            raise PageError("SCHEMA_UNKNOWN", "session.id")
+        title_col = "title" if "title" in cols else "''"
+        dir_col = "directory" if "directory" in cols else "''"
+        rows = list(con.execute(f"SELECT id, {title_col}, {dir_col} FROM session"))
+    except PageError:
+        raise
+    except sqlite3.Error as exc:
+        raise PageError("SCHEMA_UNKNOWN", str(exc)) from exc
+    finally:
+        con.close()
     hits = []
     for sid, title, directory in rows:
         if str(sid).startswith("ses_cow_"):
@@ -1239,10 +1428,41 @@ def _sql_rows(db: Path, statements: tuple[str, ...]) -> list[tuple]:
 
 
 def _epoch(value, fallback: float) -> float:
-    if isinstance(value, (int, float)) and value > 0:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
         number = float(value)
         return number / 1000.0 if number > 10**11 else number
     return fallback
+
+
+def _stamp(value, fallback: float) -> float:
+    """Numeric epoch or an ISO timestamp. Anything else keeps the file mtime."""
+    if isinstance(value, bool):
+        return fallback
+    if isinstance(value, (int, float)):
+        return _epoch(value, fallback)
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if not isinstance(value, str):
+        return fallback
+    text = value.strip()
+    if not text:
+        return fallback
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    dot = text.find(".")
+    if dot != -1:
+        frac = []
+        index = dot + 1
+        while index < len(text) and text[index].isdigit() and len(frac) < 6:
+            frac.append(text[index])
+            index += 1
+        while index < len(text) and text[index].isdigit():
+            index += 1
+        text = text[:dot] + "." + "".join(frac) + text[index:]
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return fallback
 
 
 def _json_title(path: Path) -> str:
@@ -1756,10 +1976,168 @@ def _enum_dsh(root: Path) -> list[dict]:
     return hits
 
 
+def _looks_path(text: str) -> bool:
+    if not text or len(text) > 240:
+        return False
+    if any(ch in text for ch in ("\n", "\r", "\x00")):
+        return False
+    lowered = text.lower()
+    if lowered.startswith("file:"):
+        return True
+    if len(text) >= 3 and text[1] == ":" and text[2] in "\\/":
+        return True
+    if text.startswith("\\\\") or text.startswith("/") or text.startswith("~"):
+        return True
+    return False
+
+
+def _short_cwd(value) -> str:
+    """workspace_uris only when the value is a short path or a file URI."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="replace").strip()
+    else:
+        text = str(value).strip()
+    if _looks_path(text):
+        return text
+    if not text or text[0] not in "[{":
+        return ""
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return ""
+    if isinstance(parsed, str) and _looks_path(parsed.strip()):
+        return parsed.strip()
+    if isinstance(parsed, list):
+        for item in parsed:
+            if isinstance(item, str) and _looks_path(item.strip()):
+                return item.strip()
+    return ""
+
+
+def _antigravity_db(path: Path) -> Path | None:
+    if path.name == "conversation_summaries.db" and _is_real_file(path):
+        return path
+    if _is_real_dir(path):
+        db = path / "conversation_summaries.db"
+        if _is_real_file(db):
+            return db
+    if path.parent.name == "conversations":
+        db = path.parent.parent / "conversation_summaries.db"
+        if _is_real_file(db):
+            return db
+    return None
+
+
+def _antigravity_files(harness: str, root: Path, seen: set[str]) -> list[dict]:
+    conv_dir = root / "conversations" if root.is_dir() else root.parent / "conversations"
+    if not _is_real_dir(conv_dir):
+        return []
+    hits = []
+    try:
+        children = list(conv_dir.iterdir())
+    except OSError:
+        return []
+    for conv in children:
+        if conv.suffix.lower() != ".db" or not _is_real_file(conv) or not conv.stem:
+            continue
+        if conv.stem.lower() in seen:
+            continue
+        try:
+            size = conv.stat().st_size
+        except OSError:
+            size = None
+        hits.append(_hit(
+            harness=harness, vendor_id=conv.stem, path=conv,
+            updated=_mtime(conv), nbytes=size,
+        ))
+        seen.add(conv.stem.lower())
+    return hits
+
+
+def _enum_antigravity(harness: str, root: Path) -> list[dict]:
+    """Summary rows, then conversation db files whose id is not in that table.
+
+    Preview text is not a title and is not stored on the hit.
+    """
+    db = _antigravity_db(root)
+    if db is None:
+        return _antigravity_files(harness, root, set())
+    try:
+        uri = db.resolve().as_uri() + "?mode=ro"
+        con = sqlite3.connect(uri, uri=True, timeout=1.0)
+    except sqlite3.Error as exc:
+        raise PageError("SCHEMA_UNKNOWN", str(exc)) from exc
+    try:
+        cols = {row[1] for row in con.execute("PRAGMA table_info(conversation_summaries)")}
+        if "conversation_id" not in cols:
+            raise PageError("SCHEMA_UNKNOWN", "conversation_summaries")
+        title_sql = "title" if "title" in cols else "''"
+        time_sql = "last_modified_time" if "last_modified_time" in cols else "NULL"
+        cwd_sql = "workspace_uris" if "workspace_uris" in cols else "''"
+        rows = list(con.execute(
+            f"SELECT conversation_id, {title_sql}, {time_sql}, {cwd_sql} "
+            "FROM conversation_summaries"
+        ))
+    except PageError:
+        raise
+    except sqlite3.Error as exc:
+        raise PageError("SCHEMA_UNKNOWN", str(exc)) from exc
+    finally:
+        con.close()
+    fallback = _mtime(db)
+    hits = []
+    seen: set[str] = set()
+    for cid, title, modified, workspace in rows:
+        if cid is None or str(cid) == "":
+            continue
+        sid = str(cid)
+        seen.add(sid.lower())
+        hits.append(_hit(
+            harness=harness, vendor_id=sid, path=db,
+            cwd=_short_cwd(workspace),
+            title="" if title is None else str(title),
+            updated=_stamp(modified, fallback),
+        ))
+    hits.extend(_antigravity_files(harness, db.parent, seen))
+    return hits
+
+
 def _store_present(path: Path | None) -> bool:
     if path is None:
         return False
     return _is_real_dir(path) or _is_real_file(path)
+
+
+def _antigravity_present(path: Path | None) -> bool:
+    """A missing summary database and a missing directory are absent, not empty.
+
+    A conversations directory that holds a .db is present even when the
+    summary index has not been written.
+    """
+    if path is None:
+        return False
+    if _antigravity_db(path) is not None:
+        return True
+    if not path.is_dir():
+        return False
+    conv = path / "conversations"
+    if not conv.is_dir():
+        return False
+    try:
+        return any(
+            child.suffix.lower() == ".db" and _is_real_file(child)
+            for child in conv.iterdir()
+        )
+    except OSError:
+        return False
+
+
+def _listed_store(name: str, path: Path | None) -> bool:
+    if name in _ANTIGRAVITY:
+        return _antigravity_present(path)
+    return _store_present(path)
 
 
 def _walk_report(homes: dict) -> tuple[list[dict], dict[str, str]]:
@@ -1785,6 +2163,9 @@ def _walk_report(homes: dict) -> tuple[list[dict], dict[str, str]]:
         ("amazonq", _enum_amazonq),
         ("dsh", _enum_dsh),
         ("gemini", lambda root: _enum_chat_tmp("gemini", root)),
+        ("antigravity", lambda root: _enum_antigravity("antigravity", root)),
+        ("antigravity-ide", lambda root: _enum_antigravity("antigravity-ide", root)),
+        ("antigravity-cli", lambda root: _enum_antigravity("antigravity-cli", root)),
         ("qwen", lambda root: _enum_chat_tmp("qwen", root)),
         ("cline", _enum_cline),
         ("kilo", _enum_kilo),
@@ -1793,7 +2174,7 @@ def _walk_report(homes: dict) -> tuple[list[dict], dict[str, str]]:
     )
     for name, fn in mapping:
         path = homes.get(name)
-        if not _store_present(path):
+        if not _listed_store(name, path):
             continue
         try:
             hits.extend(fn(path))
@@ -1836,7 +2217,15 @@ def _enrich(rows: list[dict]) -> None:
         path = Path(row.get("path") or "")
         if path.suffix.lower() != ".jsonl" or not path.is_file():
             continue
-        cwd, title = _sniff(path, HEAD_BYTES)
+        cwd, title = "", ""
+        if row.get("harness") in ("claude", "claude_desktop"):
+            cwd, title = _claude_meta(path)
+        if not title or not cwd:
+            sniffed_cwd, sniffed_title = _sniff(path, HEAD_BYTES)
+            if not cwd:
+                cwd = sniffed_cwd
+            if not title:
+                title = sniffed_title
         if not title:
             title = _first_user_title(path)
         if cwd and not row.get("cwd"):
@@ -1952,7 +2341,7 @@ def find(homes: dict | None = None, query: str = "", harness: str = "",
     for name in HARNESSES:
         group = [h for h in pool if h["harness"] == name]
         path = homes.get(name)
-        present = _store_present(path)
+        present = _listed_store(name, path)
         if name in failed:
             status = failed[name]
             count = None
@@ -2027,14 +2416,7 @@ def _hit_from_file(path: Path) -> dict | None:
     return None
 
 
-def _read_jsonl(path: Path) -> tuple[list[dict], bool]:
-    try:
-        size = path.stat().st_size
-    except OSError as exc:
-        raise PageError("NO_STORE", str(path)) from exc
-    if size > MAX_BYTES:
-        raise PageError("TOO_LARGE", str(path))
-    raw = path.read_bytes()
+def _rows_from_bytes(raw: bytes) -> tuple[list[dict], bool]:
     truncated = False
     rows = []
     for line in raw.splitlines(True):
@@ -2049,6 +2431,37 @@ def _read_jsonl(path: Path) -> tuple[list[dict], bool]:
         if isinstance(obj, dict):
             rows.append(obj)
     return rows, truncated
+
+
+def _read_jsonl_zst(path: Path) -> tuple[list[dict], bool]:
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise PageError("NO_STORE", str(path)) from exc
+    if size > MAX_BYTES:
+        raise PageError("TOO_LARGE", str(path))
+    try:
+        from compression import zstd
+    except ImportError as exc:
+        raise PageError("UNMEASURED", "zstd") from exc
+    try:
+        raw = zstd.decompress(path.read_bytes())
+    except Exception as exc:
+        raise PageError("UNPARSEABLE", path.name) from exc
+    if len(raw) > MAX_BYTES:
+        raise PageError("TOO_LARGE", path.name)
+    return _rows_from_bytes(raw)
+
+
+def _read_jsonl(path: Path) -> tuple[list[dict], bool]:
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise PageError("NO_STORE", str(path)) from exc
+    if size > MAX_BYTES:
+        raise PageError("TOO_LARGE", str(path))
+    raw = path.read_bytes()
+    return _rows_from_bytes(raw)
 
 
 def _turns_from_rows(rows: list[dict], harness: str) -> list[dict]:
@@ -2168,7 +2581,11 @@ def _turns_cowork(hit: dict) -> tuple[list[dict], bool]:
     return turns, False
 
 
-def _turns_openwork(hit: dict) -> tuple[list[dict], bool]:
+def _count_sha(vendor_id: str, count: int) -> str:
+    return sha256_bytes(f"{vendor_id}:{int(count)}".encode("utf-8"))
+
+
+def _turns_openwork(hit: dict) -> tuple[list[dict], bool, int]:
     if str(hit["vendor_id"]).startswith("ses_cow_"):
         raise PageError("DO_NOT_REINGEST", hit["id"])
     if hit["legal"]:
@@ -2177,19 +2594,76 @@ def _turns_openwork(hit: dict) -> tuple[list[dict], bool]:
     try:
         uri = db.resolve().as_uri() + "?mode=ro"
         con = sqlite3.connect(uri, uri=True, timeout=1.0)
-        msgs = list(con.execute(
-            "SELECT data FROM message WHERE session_id=? ORDER BY time_created, id",
-            (hit["vendor_id"],),
-        ))
-        con.close()
     except sqlite3.Error as exc:
-        raise PageError("SCHEMA_UNKNOWN", str(exc))
-    turns = []
-    for (data,) in msgs:
+        raise PageError("SCHEMA_UNKNOWN", str(exc)) from exc
+    try:
+        total = con.execute(
+            "SELECT COUNT(*) FROM message WHERE session_id=?",
+            (hit["vendor_id"],),
+        ).fetchone()
+        msgs = list(con.execute(
+            "SELECT id, data FROM message WHERE session_id=? ORDER BY time_created, id LIMIT ?",
+            (hit["vendor_id"], SESSION_CAP + 1),
+        ))
+        try:
+            parts = list(con.execute(
+                "SELECT message_id, data FROM part WHERE session_id=? "
+                "ORDER BY time_created, id LIMIT ?",
+                (hit["vendor_id"], SESSION_CAP + 1),
+            ))
+        except sqlite3.Error:
+            parts = None
+    except sqlite3.Error as exc:
+        raise PageError("SCHEMA_UNKNOWN", str(exc)) from exc
+    finally:
+        con.close()
+    count = int(total[0]) if total and total[0] is not None else 0
+    if parts:
+        count = max(count, len(parts))
+    truncated = count > SESSION_CAP or len(msgs) > SESSION_CAP or (
+        parts is not None and len(parts) > SESSION_CAP
+    )
+    if len(msgs) > SESSION_CAP:
+        msgs = msgs[:SESSION_CAP]
+    if parts and len(parts) > SESSION_CAP:
+        parts = parts[:SESSION_CAP]
+    roles: dict[str, str] = {}
+    parsed_msgs = []
+    for mid, data in msgs:
         try:
             obj = json.loads(data) if isinstance(data, str) else json.loads(data.decode("utf-8"))
         except (ValueError, AttributeError):
             obj = {"text": str(data)}
+        if not isinstance(obj, dict):
+            obj = {"text": str(data)}
+        role = str(obj.get("role") or obj.get("type") or "meta")
+        roles[str(mid)] = role
+        parsed_msgs.append(obj)
+    if parts:
+        turns = []
+        for mid, data in parts:
+            try:
+                obj = json.loads(data) if isinstance(data, str) else json.loads(data.decode("utf-8"))
+            except (ValueError, AttributeError):
+                continue
+            if not isinstance(obj, dict):
+                continue
+            text = _text_of(obj.get("text") if obj.get("text") is not None else obj.get("content"))
+            if not str(text or "").strip():
+                continue
+            role = str(roles.get(str(mid)) or obj.get("type") or "meta")
+            if role not in ("user", "assistant", "system"):
+                role = "meta"
+            turns.append({
+                "seq": len(turns) + 1,
+                "role": role,
+                "text": text,
+                "model": obj.get("model"),
+            })
+        if turns:
+            return turns, truncated, count
+    turns = []
+    for obj in parsed_msgs:
         role = str(obj.get("role") or obj.get("type") or "meta")
         if role not in ("user", "assistant", "system"):
             role = "meta"
@@ -2199,7 +2673,7 @@ def _turns_openwork(hit: dict) -> tuple[list[dict], bool]:
             "text": _text_of(obj.get("content") if "content" in obj else obj.get("text")),
             "model": obj.get("model"),
         })
-    return turns, False
+    return turns, truncated, count
 
 
 def _guard_size(path: Path) -> int:
@@ -2224,6 +2698,401 @@ def _open_hit(hit: dict) -> dict:
     return hit
 
 
+def _hermes_text(content) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, bytes):
+        return content.decode("utf-8", errors="replace")
+    return str(content)
+
+
+def _hermes_turns(rows: list[tuple]) -> list[dict]:
+    turns = []
+    for role, content in rows:
+        name = str(role or "").strip().lower()
+        if name not in ("user", "assistant", "system"):
+            name = "meta"
+        turns.append({
+            "seq": len(turns) + 1,
+            "role": name,
+            "text": _hermes_text(content),
+            "model": None,
+        })
+    return turns
+
+
+def _hermes_query(db: Path, vendor_id: str, limit: int) -> tuple[int, list[tuple]]:
+    if not db.is_file():
+        raise PageError("UNMEASURED", str(db))
+    try:
+        uri = db.resolve().as_uri() + "?mode=ro"
+        con = sqlite3.connect(uri, uri=True, timeout=1.0)
+    except sqlite3.Error as exc:
+        raise PageError("SCHEMA_UNKNOWN", str(exc)) from exc
+    try:
+        names = {
+            row[0]
+            for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        if "messages" not in names:
+            raise PageError("UNMEASURED")
+        total = con.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id=?",
+            (vendor_id,),
+        ).fetchone()
+        fetched = list(con.execute(
+            "SELECT role, content FROM messages WHERE session_id=? "
+            "ORDER BY timestamp LIMIT ?",
+            (vendor_id, int(limit)),
+        ))
+    except PageError:
+        raise
+    except sqlite3.Error as exc:
+        raise PageError("SCHEMA_UNKNOWN", str(exc)) from exc
+    finally:
+        con.close()
+    count = int(total[0]) if total and total[0] is not None else 0
+    return count, fetched
+
+
+def _turns_hermes(hit: dict) -> tuple[list[dict], bool, int]:
+    if hit.get("legal"):
+        raise PageError("LEGAL_OMITTED", hit["id"])
+    count, rows = _hermes_query(Path(hit["path"]), hit["vendor_id"], SESSION_CAP + 1)
+    truncated = count > SESSION_CAP or len(rows) > SESSION_CAP
+    if len(rows) > SESSION_CAP:
+        rows = rows[:SESSION_CAP]
+    return _hermes_turns(rows), truncated, count
+
+
+def _summary_preview(hit: dict) -> tuple[str, bool]:
+    if hit.get("legal"):
+        raise PageError("LEGAL_OMITTED", hit["id"])
+    path = Path(hit["path"])
+    db = _antigravity_db(path)
+    if db is None:
+        raise PageError("UNMEASURED", str(path))
+    try:
+        uri = db.resolve().as_uri() + "?mode=ro"
+        con = sqlite3.connect(uri, uri=True, timeout=1.0)
+    except sqlite3.Error as exc:
+        raise PageError("SCHEMA_UNKNOWN", str(exc)) from exc
+    try:
+        row = con.execute(
+            "SELECT preview FROM conversation_summaries WHERE conversation_id=?",
+            (hit["vendor_id"],),
+        ).fetchone()
+    except sqlite3.Error as exc:
+        raise PageError("SCHEMA_UNKNOWN", str(exc)) from exc
+    finally:
+        con.close()
+    if row is None or row[0] is None:
+        raise PageError("UNMEASURED")
+    if isinstance(row[0], str):
+        preview = row[0]
+    elif isinstance(row[0], bytes):
+        preview = row[0].decode("utf-8", errors="replace")
+    else:
+        preview = str(row[0])
+    if not preview.strip():
+        raise PageError("UNMEASURED")
+    truncated = len(preview) > SUMMARY_CAP
+    if truncated:
+        preview = preview[:SUMMARY_CAP]
+    return preview, truncated
+
+
+_AG_STEP_CAP = 40
+_AG_TEXT_MIN = 12
+_AG_TEXT_MAX = 2000
+_AG_PUNCT = set(" .,;:!?\"'`-_()[]{}/*+&=@#$%^~|\\<>")
+_MIME_ONLY = re.compile(
+    r"(?i)^(?:application|audio|chemical|example|font|image|message|model|"
+    r"multipart|text|video)/[a-z0-9][a-z0-9!#$&^_.+-]{0,127}$"
+)
+
+
+def _ag_varint(buf: bytes, i: int) -> tuple[int | None, int]:
+    value = 0
+    shift = 0
+    n = len(buf)
+    start = i
+    while i < n and shift <= 63 and i - start < 10:
+        byte = buf[i]
+        i += 1
+        value |= (byte & 0x7F) << shift
+        if byte < 0x80:
+            return value, i
+        shift += 7
+    return None, i
+
+
+def _walk_length_delimited(buf: bytes, out: list[bytes], depth: int = 0) -> None:
+    """Length-delimited protobuf bytes only. Not a schema decode."""
+    if depth > 6 or not buf or len(out) > 200:
+        return
+    i = 0
+    n = len(buf)
+    while i < n and len(out) <= 200:
+        tag, j = _ag_varint(buf, i)
+        if tag is None or j == i:
+            return
+        wire = tag & 7
+        if wire == 0:
+            _value, k = _ag_varint(buf, j)
+            if k == j:
+                return
+            i = k
+        elif wire == 1:
+            if j + 8 > n:
+                return
+            i = j + 8
+        elif wire == 5:
+            if j + 4 > n:
+                return
+            i = j + 4
+        elif wire == 2:
+            length, k = _ag_varint(buf, j)
+            if length is None or length < 0 or k + length > n:
+                return
+            chunk = buf[k:k + length]
+            out.append(chunk)
+            if not _ag_closed_text(chunk):
+                _walk_length_delimited(chunk, out, depth + 1)
+            i = k + length
+        else:
+            return
+
+
+def _ag_closed_text(chunk: bytes) -> bool:
+    if len(chunk) < _AG_TEXT_MIN or len(chunk) > _AG_TEXT_MAX * 4:
+        return False
+    try:
+        text = chunk.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return bool(text) and all(ch.isprintable() for ch in text)
+
+
+def _ag_drop(text: str) -> bool:
+    s = text.strip()
+    bare = s[1:-1] if len(s) >= 38 and s[0] == "{" and s[-1] == "}" else s
+    if _UUID.fullmatch(bare):
+        return True
+    if _MIME_ONLY.fullmatch(s):
+        return True
+    if _looks_path(s):
+        return True
+    if len(s) >= 3 and s[1] == ":" and s[2] in "\\/":
+        return True
+    if s.startswith("\\\\") or s.startswith("//") or s.lower().startswith("file:"):
+        return True
+    if not any(ch.isspace() for ch in s) and ("/" in s or "\\" in s):
+        return True
+    return False
+
+
+def _ag_keep(text: str) -> bool:
+    n = len(text)
+    if n < _AG_TEXT_MIN or n > _AG_TEXT_MAX:
+        return False
+    if not any(ch.isalnum() for ch in text):
+        return False
+    good = sum(1 for ch in text if ch.isalnum() or ch in _AG_PUNCT)
+    if good * 3 < n * 2:
+        return False
+    return not _ag_drop(text)
+
+
+def _ag_printable_runs(data: bytes) -> list[str]:
+    runs: list[str] = []
+    chars: list[str] = []
+    skipping = False
+    i = 0
+    n = len(data)
+
+    def flush() -> None:
+        if chars:
+            runs.append("".join(chars))
+            chars.clear()
+
+    while i < n:
+        b = data[i]
+        if b < 0x80:
+            size = 1
+        elif 0xC2 <= b <= 0xDF:
+            size = 2
+        elif 0xE0 <= b <= 0xEF:
+            size = 3
+        elif 0xF0 <= b <= 0xF4:
+            size = 4
+        else:
+            flush()
+            skipping = False
+            i += 1
+            continue
+        if i + size > n:
+            flush()
+            break
+        try:
+            ch = data[i:i + size].decode("utf-8")
+        except UnicodeDecodeError:
+            flush()
+            skipping = False
+            i += 1
+            continue
+        if len(ch) == 1 and ch.isprintable():
+            if not skipping:
+                chars.append(ch)
+                if len(chars) > _AG_TEXT_MAX:
+                    chars.clear()
+                    skipping = True
+            i += size
+        else:
+            flush()
+            skipping = False
+            i += size
+    flush()
+    return runs
+
+
+def _ag_payload_strings(blob: bytes) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(text: str) -> None:
+        s = text.strip()
+        if s in seen or not _ag_keep(s):
+            return
+        seen.add(s)
+        found.append(s)
+
+    chunks: list[bytes] = []
+    _walk_length_delimited(blob, chunks)
+    for chunk in chunks:
+        if len(chunk) < _AG_TEXT_MIN or len(chunk) > _AG_TEXT_MAX * 4:
+            continue
+        try:
+            add(chunk.decode("utf-8"))
+        except UnicodeDecodeError:
+            continue
+    for run in _ag_printable_runs(blob):
+        add(run)
+    return found
+
+
+def _antigravity_conv(hit: dict) -> Path | None:
+    vid = str(hit.get("vendor_id") or "")
+    if not vid or vid in (".", "..") or any(ch in vid for ch in "/\\:\x00"):
+        return None
+    path = Path(hit.get("path") or "")
+    if (
+        path.parent.name == "conversations"
+        and path.suffix.lower() == ".db"
+        and path.stem == vid
+        and _is_real_file(path)
+    ):
+        return path
+    summary = _antigravity_db(path)
+    if summary is not None:
+        root = summary.parent
+    elif _is_real_dir(path):
+        root = path
+    elif path.parent.name == "conversations":
+        root = path.parent.parent
+    else:
+        return None
+    conv = root / "conversations" / f"{vid}.db"
+    if _is_real_file(conv):
+        return conv
+    return None
+
+
+def _antigravity_step_blobs(conv: Path) -> tuple[list[bytes], bool]:
+    """At most 40 step_payload values. metadata is not selected."""
+    try:
+        uri = conv.resolve().as_uri() + "?mode=ro"
+        con = sqlite3.connect(uri, uri=True, timeout=1.0)
+    except sqlite3.Error:
+        return [], False
+    try:
+        try:
+            names = {
+                row[0]
+                for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            if "steps" not in names:
+                return [], False
+            cols = {row[1] for row in con.execute("PRAGMA table_info(steps)")}
+            if "step_payload" not in cols:
+                return [], False
+            extra = con.execute(
+                "SELECT 1 FROM steps LIMIT 1 OFFSET ?",
+                (_AG_STEP_CAP,),
+            ).fetchone()
+            rows = con.execute(
+                "SELECT step_payload FROM steps LIMIT ?",
+                (_AG_STEP_CAP,),
+            )
+        except sqlite3.Error:
+            return [], False
+        blobs: list[bytes] = []
+        for (payload,) in rows:
+            if isinstance(payload, bytes):
+                blobs.append(payload)
+            elif isinstance(payload, memoryview):
+                blobs.append(payload.tobytes())
+            elif isinstance(payload, str) and payload:
+                blobs.append(payload.encode("utf-8"))
+        return blobs, extra is not None
+    finally:
+        con.close()
+
+
+def _antigravity_step_texts(hit: dict) -> tuple[list[str], bool]:
+    conv = _antigravity_conv(hit)
+    if conv is None:
+        return [], False
+    blobs, more_steps = _antigravity_step_blobs(conv)
+    texts: list[str] = []
+    seen: set[str] = set()
+    truncated = more_steps
+    for blob in blobs:
+        for text in _ag_payload_strings(blob):
+            if text in seen:
+                continue
+            if len(texts) >= _AG_STEP_CAP:
+                return texts, True
+            seen.add(text)
+            texts.append(text)
+    return texts, truncated
+
+
+def _turns_antigravity(hit: dict) -> tuple[list[dict], bool, str]:
+    if hit.get("legal"):
+        raise PageError("LEGAL_OMITTED", hit["id"])
+    texts, truncated = _antigravity_step_texts(hit)
+    if texts:
+        turns = [
+            {"seq": i, "role": "meta", "text": text, "model": None}
+            for i, text in enumerate(texts, start=1)
+        ]
+        source_sha = sha256_bytes(
+            (str(hit["vendor_id"]) + "\n" + "\n".join(texts)).encode("utf-8")
+        )
+        return turns, truncated, source_sha
+    preview, truncated = _summary_preview(hit)
+    turns = [{"seq": 1, "role": "user", "text": preview, "model": None}]
+    source_sha = sha256_bytes(
+        (str(hit["vendor_id"]) + "\n").encode("utf-8") + preview.encode("utf-8")
+    )
+    return turns, truncated, source_sha
+
+
 def _rows_from_json(obj: object) -> list[dict]:
     if isinstance(obj, list):
         return [item for item in obj if isinstance(item, dict)]
@@ -2237,19 +3106,45 @@ def _rows_from_json(obj: object) -> list[dict]:
 def load_record(hit: dict) -> dict:
     hit = _open_hit(hit)
     path = Path(hit["path"])
-    if path.is_file():
+    harness = hit["harness"]
+    # Whole-file guards reject a multi-gigabyte database before the per-session query.
+    if (
+        path.is_file()
+        and harness not in _DB_HARNESSES
+        and path.suffix.lower() not in _SQL_SUFFIXES
+    ):
         _guard_size(path)
     truncated = False
-    if hit["harness"] == "cowork":
+    if harness == "cowork":
         turns, truncated = _turns_cowork(hit)
         source_sha = sha256_bytes(path.read_bytes()) if path.is_file() else ""
-    elif hit["harness"] == "openwork":
-        turns, truncated = _turns_openwork(hit)
-        source_sha = sha256_bytes(path.read_bytes()) if path.is_file() else ""
-    elif path.suffix.lower() == ".jsonl" and path.is_file():
-        rows, truncated = _read_jsonl(path)
-        turns = _turns_from_rows(rows, hit["harness"])
+    elif harness == "openwork":
+        turns, truncated, count = _turns_openwork(hit)
+        source_sha = _count_sha(hit["vendor_id"], count)
+    elif harness == "hermes":
+        turns, truncated, count = _turns_hermes(hit)
+        source_sha = _count_sha(hit["vendor_id"], count)
+    elif harness in _ANTIGRAVITY:
+        turns, truncated, source_sha = _turns_antigravity(hit)
+    elif path.name.lower().endswith(".jsonl.zst"):
+        if not path.is_file():
+            raise PageError("MISSING_FILE", "rollout file is gone")
+        rows, truncated = _read_jsonl_zst(path)
+        turns = _turns_from_rows(rows, harness)
         source_sha = sha256_bytes(path.read_bytes())
+    elif path.suffix.lower() == ".jsonl":
+        if not path.is_file():
+            zst = Path(str(path) + ".zst")
+            if zst.is_file():
+                rows, truncated = _read_jsonl_zst(zst)
+                turns = _turns_from_rows(rows, harness)
+                source_sha = sha256_bytes(zst.read_bytes())
+            else:
+                raise PageError("MISSING_FILE", "rollout file is gone")
+        else:
+            rows, truncated = _read_jsonl(path)
+            turns = _turns_from_rows(rows, harness)
+            source_sha = sha256_bytes(path.read_bytes())
     elif path.suffix.lower() == ".json" and path.is_file():
         try:
             obj = json.loads(path.read_text(encoding="utf-8"))
@@ -2258,10 +3153,10 @@ def load_record(hit: dict) -> dict:
         rows = _rows_from_json(obj)
         if not rows:
             raise PageError("UNMEASURED", str(path))
-        turns = _turns_from_rows(rows, hit["harness"])
+        turns = _turns_from_rows(rows, harness)
         truncated = False
         source_sha = sha256_bytes(path.read_bytes())
-    elif hit["harness"] == "cursor" and path.suffix.lower() == ".db":
+    elif harness == "cursor" and path.suffix.lower() == ".db":
         raise PageError("UNMEASURED", "cursor store.db has no transcript adapter in this plug")
     else:
         raise PageError("UNMEASURED", hit["path"])
@@ -2404,6 +3299,20 @@ def _message_turns(rows: list[tuple]) -> list[dict]:
     return turns
 
 
+def _preview_hermes(hit: dict, n_want: int, chars: int) -> dict:
+    if hit.get("legal"):
+        raise PageError("LEGAL_OMITTED", hit["id"])
+    count, rows = _hermes_query(Path(hit["path"]), hit["vendor_id"], max(0, int(n_want)))
+    shown = _clip_turns(_hermes_turns(rows), n_want, chars)
+    return _preview_result(hit, "OK", count, shown)
+
+
+def _preview_antigravity(hit: dict, n_want: int, chars: int) -> dict:
+    turns, truncated, _source = _turns_antigravity(hit)
+    kind = "TRUNCATED" if truncated else "OK"
+    return _preview_result(hit, kind, len(turns), _clip_turns(turns, n_want, chars))
+
+
 def _preview_openwork(hit: dict, n_want: int, chars: int) -> dict:
     if str(hit["vendor_id"]).startswith("ses_cow_"):
         raise PageError("DO_NOT_REINGEST", hit["id"])
@@ -2472,6 +3381,10 @@ def preview(rec_id: str, homes: dict | None = None, turns: int = 6, chars: int =
     limit = max(0, int(chars))
     if hit["harness"] == "openwork":
         return _preview_openwork(hit, n_want, limit)
+    if hit["harness"] == "hermes":
+        return _preview_hermes(hit, n_want, limit)
+    if hit["harness"] in _ANTIGRAVITY:
+        return _preview_antigravity(hit, n_want, limit)
     if hit["harness"] == "cowork":
         return _preview_cowork(hit, n_want, limit)
     if path.suffix.lower() == ".jsonl" and path.is_file():
@@ -2500,6 +3413,13 @@ def _source_hash(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
 
 
+def _source_hash_for(hit: dict, path: Path) -> str:
+    """OpenWork and Hermes databases are not read whole."""
+    if hit.get("harness") in ("openwork", "hermes"):
+        return ""
+    return _source_hash(path)
+
+
 def _same_source(path: Path, before: str) -> None:
     if before and _source_hash(path) != before:
         raise PageError("FIDELITY_MISMATCH", "source changed during read")
@@ -2509,7 +3429,7 @@ def import_session(rec_id: str, out_dir: Path, homes: dict | None = None) -> dic
     homes = homes if homes is not None else default_homes()
     hit = _open_hit(_by_id(homes, rec_id))
     source = Path(hit["path"])
-    before = _source_hash(source)
+    before = _source_hash_for(hit, source)
     loaded = load_record(hit)
     _same_source(source, before)
     payload = encode_transcript(loaded["head"], loaded["turns"])
@@ -2525,7 +3445,7 @@ def export_md(rec_id: str, out_dir: Path, homes: dict | None = None) -> dict:
     homes = homes if homes is not None else default_homes()
     hit = _open_hit(_by_id(homes, rec_id))
     source = Path(hit["path"])
-    before = _source_hash(source)
+    before = _source_hash_for(hit, source)
     loaded = load_record(hit)
     _same_source(source, before)
     lines = [f"# {loaded['head'].get('title') or hit['id']}", "",
@@ -2546,7 +3466,7 @@ def export_md(rec_id: str, out_dir: Path, homes: dict | None = None) -> dict:
 
 def build_index(out_path: Path | None = None, homes: dict | None = None,
                 limit: int = 0) -> dict:
-    found = find(homes=homes, limit=limit or 10**9, enrich=False)
+    found = find(homes=homes, limit=limit or 10**9, enrich=True)
     out_path = out_path or (var_dir() / "index.jsonl")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     lines = []
@@ -2571,6 +3491,49 @@ def build_index(out_path: Path | None = None, homes: dict | None = None,
         "n": found["n"], "n_legal": found["legal_omitted"],
         "out": str(out_path), "out_sha": sha256_bytes(payload), "len": len(payload),
     }, legal_omitted=found["legal_omitted"])
+
+
+def read_saved_index(path: Path | None = None) -> dict:
+    """Saved index rows only. Does not stat vendor files or walk homes."""
+    index_path = var_dir() / "index.jsonl" if path is None else path
+
+    def pack(hits: list[dict], cached: bool) -> dict:
+        n = len(hits)
+        legal = sum(1 for hit in hits if hit.get("legal"))
+        return _result(
+            "find", "OK",
+            {"cached": cached, "n": n, "n_shown": n},
+            legal_omitted=legal, hits=hits, n=n,
+        )
+
+    try:
+        raw = index_path.read_bytes()
+    except OSError:
+        return pack([], False)
+    hits: list[dict] = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if not isinstance(row, dict):
+            continue
+        aliases = row.get("aliases")
+        hits.append({
+            "id": "" if row.get("id") is None else str(row.get("id")),
+            "harness": "" if row.get("harness") is None else str(row.get("harness")),
+            "vendor_id": "" if row.get("vendor_id") is None else str(row.get("vendor_id")),
+            "path": "" if row.get("path") is None else str(row.get("path")),
+            "cwd": "" if row.get("cwd") is None else str(row.get("cwd")),
+            "title": "" if row.get("title") is None else str(row.get("title")),
+            "legal": row.get("legal") is True,
+            "updated": row.get("updated"),
+            "bytes": row.get("bytes"),
+            "aliases": aliases if isinstance(aliases, dict) else {},
+        })
+    return pack(hits, True)
 
 
 def _jsonl_state(path: Path) -> tuple[str, str]:
@@ -2731,6 +3694,68 @@ def recover(target: Path, bak: Path | None = None, stage: Path | None = None,
     })
 
 
+def launch_specs() -> list[tuple[str, list[str], list[Path]]]:
+    """Harness id, command names, and extra exe paths to try on this machine."""
+    home = Path.home()
+    local = Path(os.environ.get("LOCALAPPDATA") or "")
+    roaming = Path(os.environ.get("APPDATA") or "")
+    return [
+        ("grok", ["grok"], [home / ".grok" / "bin" / "grok.exe"]),
+        ("claude", ["claude"], []),
+        ("claude_desktop", ["claude"], [
+            local / "AnthropicClaude" / "claude.exe",
+            local / "Programs" / "Claude" / "Claude.exe",
+        ]),
+        ("codex", ["codex"], []),
+        ("cursor", ["agent", "cursor-agent"], []),
+        ("gemini", ["gemini"], []),
+        ("agy", ["agy"], [
+            home / ".gemini" / "bin" / "agy.exe",
+            local / "agy" / "bin" / "agy.exe",
+        ]),
+        ("antigravity", ["agy"], [
+            home / ".gemini" / "bin" / "agy.exe",
+            local / "Programs" / "antigravity" / "Antigravity.exe",
+        ]),
+        ("antigravity-cli", ["agy"], [
+            home / ".gemini" / "bin" / "agy.exe",
+            local / "agy" / "bin" / "agy.exe",
+        ]),
+        ("antigravity-ide", ["agy"], [
+            local / "Programs" / "Antigravity IDE" / "Antigravity IDE.exe",
+            local / "Programs" / "Antigravity IDE" / "Antigravity.exe",
+        ]),
+        ("hermes", ["hermes"], []),
+        ("pi", ["pi"], []),
+        ("copilot", ["copilot"], []),
+        ("qwen", ["qwen"], []),
+        ("goose", ["goose"], []),
+        ("cline", ["cline"], []),
+        ("crush", ["crush"], []),
+        ("openwork", ["OpenWork"], [roaming / "OpenWork" / "OpenWork.exe"]),
+        ("cowork", ["OpenWork"], [roaming / "OpenWork" / "OpenWork.exe"]),
+    ]
+
+
+def installed_launchers() -> list[tuple[str, str]]:
+    """(harness, exe path) for apps that exist on this machine. Missing apps are omitted."""
+    found = []
+    seen = set()
+    for harness, names, extra in launch_specs():
+        binary = _which(names, extra)
+        if binary and binary not in seen:
+            found.append((harness, binary))
+            seen.add(binary)
+    return found
+
+
+def _binary_for(harness: str) -> str | None:
+    for name, names, extra in launch_specs():
+        if name == harness:
+            return _which(names, extra)
+    return None
+
+
 def _which(names: list[str], extra: list[Path]) -> str | None:
     for path in extra:
         if path.is_file():
@@ -2790,9 +3815,32 @@ def resume(rec_id: str, homes: dict | None = None, launch: bool = False) -> dict
             "detail": "focus this id in OpenWork; this plug does not spawn OpenWork.exe",
         })
     else:
-        return _result("resume", "UNMEASURED", {
-            "id": hit["id"], "harness": harness, "argv": None, "launched": False,
-        })
+        # A Cline task file is not a session. The messages.json branch above
+        # is the only Cline resume. Do not start the bare binary for it.
+        if harness == "cline":
+            return _result("resume", "UNMEASURED", {
+                "id": hit["id"], "harness": harness, "argv": None, "launched": False,
+            })
+        binary = _binary_for(harness)
+        if not binary:
+            return _result("resume", "UNMEASURED", {
+                "id": hit["id"], "harness": harness, "argv": None, "launched": False,
+            })
+        argv = [binary]
+        gate = {
+            "id": hit["id"], "harness": harness, "argv": argv, "cwd": cwd,
+            "binary": binary, "launched": False,
+            "detail": "started in the project folder; this harness has no resume id flag",
+        }
+        if not launch:
+            return _result("resume", "OK", gate)
+        if cwd and not Path(cwd).is_dir():
+            raise PageError("CWD_MISSING", cwd)
+        flags = subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0
+        proc = subprocess.Popen(argv, cwd=cwd or None, creationflags=flags, close_fds=True)
+        gate["launched"] = True
+        gate["pid"] = proc.pid
+        return _result("resume", "LAUNCHED", gate)
     if binary:
         argv = [binary, *argv[1:]]
     gate = {
@@ -2836,7 +3884,7 @@ def anonymize(rec_id: str, out_dir: Path, homes: dict | None = None) -> dict:
     homes = homes if homes is not None else default_homes()
     hit = _open_hit(_by_id(homes, rec_id))
     source = Path(hit["path"])
-    before = _source_hash(source)
+    before = _source_hash_for(hit, source)
     loaded = load_record(hit)
     _same_source(source, before)
     n = 0
@@ -3084,6 +4132,12 @@ def dispatch(action: str, body: dict | None = None, homes: dict | None = None) -
         return _result("doi", "UNPROVEN", {"detail": "citation existence is not fetched"})
     if action not in VERBS:
         raise PageError("BAD_ACTION", action or "(empty)")
+    if action == "formats":
+        try:
+            import formats
+        except ImportError:
+            raise PageError("UNMEASURED", "formats")
+        return _result("formats", "OK", formats.catalog())
     if action == "preview":
         rec_id = str(body.get("id") or "")
         if not rec_id:

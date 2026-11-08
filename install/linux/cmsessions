@@ -1,0 +1,52 @@
+#!/bin/sh
+# Frozen sessions_page writes var/ beside the executable (parent of argv0,
+# after symlink resolution). /usr/local/lib/cmsessions is not writable by a
+# normal user. Copy the real binary into the home directory (never symlink
+# it) and exec that copy so var/ is writable.
+set -eu
+
+INSTALL_BIN=/usr/local/lib/cmsessions/sessions_page
+DEST_DIR=${HOME:?cmsessions: HOME is not set}/.local/share/cmsessions
+DEST_BIN=$DEST_DIR/sessions_page
+tmp=
+
+cleanup() {
+  if [ -n "$tmp" ] && [ -f "$tmp" ]; then
+    rm -f "$tmp"
+  fi
+}
+trap cleanup EXIT
+
+if [ ! -f "$INSTALL_BIN" ]; then
+  echo "cmsessions: missing installed binary: $INSTALL_BIN" >&2
+  exit 1
+fi
+
+mkdir -p "$DEST_DIR"
+
+need=0
+if [ ! -f "$DEST_BIN" ] || [ -L "$DEST_BIN" ]; then
+  need=1
+elif command -v cmp >/dev/null 2>&1; then
+  if ! cmp -s "$INSTALL_BIN" "$DEST_BIN"; then
+    need=1
+  fi
+elif [ "$INSTALL_BIN" -nt "$DEST_BIN" ]; then
+  need=1
+fi
+
+if [ "$need" -eq 1 ]; then
+  tmp=$DEST_DIR/sessions_page.tmp.$$
+  cp -f "$INSTALL_BIN" "$tmp"
+  chmod 755 "$tmp"
+  # mv replaces a symlink; it does not follow it and overwrite the install tree.
+  mv -f "$tmp" "$DEST_BIN"
+  tmp=
+fi
+
+if [ ! -x "$DEST_BIN" ] || [ -L "$DEST_BIN" ]; then
+  echo "cmsessions: cannot execute a real copy at $DEST_BIN" >&2
+  exit 1
+fi
+
+exec "$DEST_BIN" "$@"

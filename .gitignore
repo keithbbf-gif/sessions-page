@@ -1,5 +1,8 @@
 __pycache__/
 *.pyc
 dist/
+dist_desk/
+dist_new/
 build/
 var/
+install/windows/out/

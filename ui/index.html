@@ -3,94 +3,207 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sessions</title>
+<title>CM Sessions</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
 <div class="app">
-<nav class="rail" aria-label="Sections">
-  <button type="button" id="nav-overview" class="nav on">
-    <span class="mark mark-drives" aria-hidden="true">
-      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
-    </span>
-    <span class="nav-copy">
-      <strong>Overview</strong>
-      <span class="hint">Drives and locations</span>
-    </span>
-  </button>
-  <button type="button" id="nav-sessions" class="nav">
-    <span class="mark mark-sessions" aria-hidden="true">
-      <svg viewBox="0 0 24 24"><path d="M5 7h14M5 12h14M5 17h9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
-    </span>
-    <span class="nav-copy">
-      <strong>Sessions</strong>
-      <span class="hint">Search, resume, recover</span>
-    </span>
-  </button>
-</nav>
-<div class="stage">
-<header>
-  <div>
-    <h1>Sessions</h1>
-    <p id="lead">Scanning drives and default locations…</p>
-  </div>
-  <div class="header-actions">
-    <button type="button" id="refresh" class="icon-btn" aria-label="Refresh">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M20 4v6h-6" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
-    </button>
-    <button type="button" id="index">Build index</button>
-    <button type="button" id="quit">Quit</button>
-  </div>
-</header>
-<section id="overview">
-  <h2>Drives</h2>
-  <div id="drive-grid" class="icon-grid"></div>
-  <h2>Default locations</h2>
-  <div id="place-grid" class="icon-grid"></div>
-  <details id="absent-wrap">
-    <summary id="absent-sum">Not on this machine</summary>
-    <div id="absent-grid" class="icon-grid"></div>
-  </details>
-</section>
-<section id="sessions" hidden>
-<section class="filters">
-  <input id="q" type="search" placeholder="Search title, id, or folder" aria-label="Search">
-  <div id="scope" class="chips" aria-label="Active filters"></div>
-  <div id="harness" class="chips" role="group" aria-label="Harness"></div>
-</section>
-<main>
-  <section class="list-wrap">
-    <div class="list-head">
-      <span id="count">Loading recent sessions…</span>
+  <header class="top">
+    <div class="brand-block">
+      <strong>CM Sessions</strong>
+      <span>Solaro Labs</span>
     </div>
-    <ul id="list"></ul>
-  </section>
-  <section class="detail" id="detail">
-    <h2 id="d-title">No session selected</h2>
-    <p id="d-meta" class="muted">Choose one from the list. Legal sessions stay closed.</p>
-    <p id="d-cmd" class="cmd" hidden></p>
-    <pre id="preview" class="preview">Select a session to preview it. Legal sessions stay closed.</pre>
-    <div class="actions">
-      <button type="button" id="resume" disabled>Show resume</button>
-      <button type="button" id="launch" disabled>Launch</button>
-      <button type="button" id="import" disabled>Import</button>
-      <button type="button" id="export" disabled>Export</button>
-      <button type="button" id="recover" disabled>Check recovery</button>
-      <button type="button" id="restore" disabled>Restore from backup</button>
-      <button type="button" id="strip-dry" disabled>Check strip</button>
-      <button type="button" id="strip" disabled>Write strip</button>
-      <button type="button" id="anonymize" disabled>Anonymize</button>
+    <div class="types" aria-label="Session type">
+      <span class="type-label">Session type</span>
+      <span class="type-icon" title="CLI">CLI</span>
+      <span class="type-icon" title="TUI">TUI</span>
+      <span class="type-icon" title="Chat">Chat</span>
     </div>
-    <p id="say" class="say">Legal text is never opened. Launch is the only button that starts a harness.</p>
-    <details>
-      <summary>Record</summary>
-      <pre id="out"></pre>
-    </details>
-  </section>
-</main>
-</section>
+    <button type="button" id="summaries">Create summaries</button>
+    <div class="groups" role="group" aria-label="Table view">
+      <span>Table view</span>
+      <button type="button" data-group="maker">Group by maker</button>
+      <button type="button" data-group="project">Group by project</button>
+      <button type="button" data-group="topic">Group by topic</button>
+      <button type="button" data-group="flat" class="on">Flat</button>
+    </div>
+    <nav class="view-nav" aria-label="Views">
+      <button type="button" data-view="table" class="on">Table</button>
+      <button type="button" data-view="session">Session</button>
+      <button type="button" data-view="calendar">Calendar</button>
+      <button type="button" data-view="projects">Projects</button>
+    </nav>
+    <form id="search-form" class="search" role="search">
+      <label class="sr" for="q">Search</label>
+      <input id="q" type="search" placeholder="Search title, path, or app" autocomplete="off" spellcheck="false">
+    </form>
+    <button type="button" id="print">Print this view</button>
+  </header>
+
+  <div class="chips" aria-label="Columns">
+    <label class="check v-claude"><input type="checkbox" name="vendor" value="claude" checked> Claude</label>
+    <label class="check v-codex"><input type="checkbox" name="vendor" value="codex" checked> Codex</label>
+    <label class="check v-grok"><input type="checkbox" name="vendor" value="grok" checked> Grok</label>
+    <label class="check v-antigravity"><input type="checkbox" name="vendor" value="antigravity" checked> Antigravity</label>
+    <label class="check v-gemini"><input type="checkbox" name="vendor" value="gemini" checked> Gemini</label>
+    <label class="check v-other"><input type="checkbox" name="vendor" value="other" checked> Other</label>
+    <span class="chip-gap"></span>
+    <label class="check"><input type="checkbox" data-col="time" checked> Time</label>
+    <label class="check"><input type="checkbox" data-col="title" checked> Session title</label>
+    <label class="check"><input type="checkbox" data-col="size" checked> Token count</label>
+    <label class="check"><input type="checkbox" data-col="topic" checked> Topics</label>
+    <label class="check"><input type="checkbox" data-col="project" checked> Project</label>
+    <label class="check s-active"><input type="checkbox" name="status" value="active" checked> active</label>
+    <label class="check s-idle"><input type="checkbox" name="status" value="idle" checked> idle</label>
+    <label class="check s-crashed"><input type="checkbox" name="status" value="crashed" checked> crashed</label>
+  </div>
+
+  <div class="stage">
+    <section id="view-table" class="view" data-view-panel="table">
+      <div class="table-wrap">
+        <p id="count" class="count-line">Sessions</p>
+        <table class="sheet">
+          <thead>
+            <tr>
+              <th>Source app</th>
+              <th class="col-time">Time last active</th>
+              <th class="col-title">Session title</th>
+              <th class="col-size">Size / tokens</th>
+              <th class="col-topic">Session topics</th>
+              <th class="col-project">Project</th>
+            </tr>
+          </thead>
+          <tbody id="list"></tbody>
+        </table>
+      </div>
+      <aside class="glance" aria-label="At a glance">
+        <h2>At a glance</h2>
+        <section>
+          <h3>7 days</h3>
+          <ul id="glance-week"></ul>
+        </section>
+        <section>
+          <h3>Week</h3>
+          <p id="glance-this-week"></p>
+        </section>
+        <section>
+          <h3>Monthly</h3>
+          <p id="glance-month"></p>
+        </section>
+        <section>
+          <h3>Quarterly</h3>
+          <p id="glance-quarter"></p>
+        </section>
+      </aside>
+    </section>
+
+    <section id="view-session" class="view" data-view-panel="session" hidden>
+      <header class="session-head">
+        <div class="app-mark" id="app-mark" aria-hidden="true"></div>
+        <dl class="facts">
+          <div><dt>Date</dt><dd id="fact-date">—</dd></div>
+          <div><dt>Start</dt><dd id="fact-start">—</dd></div>
+          <div><dt>End</dt><dd id="fact-end">—</dd></div>
+          <div><dt>Size</dt><dd id="fact-size">—</dd></div>
+          <div><dt>Tokens</dt><dd id="fact-tokens">input / output / total —</dd></div>
+          <div><dt>Time</dt><dd id="fact-time">—</dd></div>
+          <div><dt>Topic</dt><dd id="fact-topic">—</dd></div>
+          <div><dt>Location</dt><dd id="fact-path">—</dd></div>
+          <div><dt>Keywords</dt><dd id="fact-keys">—</dd></div>
+        </dl>
+        <div class="resume-chain">
+          <button type="button" id="continue" disabled>Resume</button>
+          <span aria-hidden="true">→</span>
+          <span class="chain-box" id="chain-harness">TUI / harness</span>
+          <span aria-hidden="true">→</span>
+          <span class="chain-box" id="chain-model">Model / agent</span>
+        </div>
+        <p class="setup-note">Exes mapped from the session. Initial setup is the source app.</p>
+        <div class="menu handoff-wrap">
+          <button type="button" id="handoff" disabled aria-haspopup="menu" aria-expanded="false">Hand off</button>
+          <ul id="handoff-menu" role="menu" hidden>
+            <li role="none"><button type="button" role="menuitem" data-harness="grok">grok</button></li>
+            <li role="none"><button type="button" role="menuitem" data-harness="claude">claude</button></li>
+            <li role="none"><button type="button" role="menuitem" data-harness="codex">codex</button></li>
+            <li role="none"><button type="button" role="menuitem" data-harness="gemini">gemini</button></li>
+            <li role="none"><button type="button" role="menuitem" data-harness="antigravity">antigravity</button></li>
+          </ul>
+        </div>
+        <p id="handoff-line" class="handoff-line"></p>
+        <p id="argv" class="argv" hidden></p>
+        <div class="context">
+          <div class="bar empty" id="context-bar" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="Context unknown">
+            <i id="context-fill"></i>
+          </div>
+          <span id="context-label">Context unknown</span>
+        </div>
+      </header>
+      <div class="session-panes">
+        <section class="pane">
+          <h2>Session text</h2>
+          <div id="preview" class="preview" aria-live="polite"></div>
+        </section>
+        <section class="pane">
+          <h2>Session preview</h2>
+          <div id="session-preview" class="preview"></div>
+        </section>
+      </div>
+      <div class="actions">
+        <button type="button" id="copy" disabled>Copy</button>
+        <button type="button" id="export-md" disabled>Export Markdown</button>
+        <button type="button" id="export-json" disabled>Export JSON</button>
+        <button type="button" id="import" disabled>Import</button>
+        <button type="button" id="anonymize" disabled>Anonymize</button>
+        <button type="button" id="restore" disabled>Restore</button>
+      </div>
+      <p id="say" class="say" role="status"></p>
+    </section>
+
+    <section id="view-calendar" class="view" data-view-panel="calendar" hidden>
+      <h2>Calendar view</h2>
+      <form id="span-form" class="span">
+        <label>Search terms <input id="span-q" type="search" placeholder="Terms"></label>
+        <label>Start <input id="span-start" type="date"></label>
+        <label>End <input id="span-end" type="date"></label>
+      </form>
+      <div id="calendar" class="calendar"></div>
+      <div class="plan-row" id="plan-row"></div>
+      <section class="plan-notes">
+        <h3>Summary</h3>
+        <p id="plan-summary">Sessions in the visible days, counted locally.</p>
+        <h3>Loose ends</h3>
+        <p id="plan-loose">Idle sessions still in the list.</p>
+        <h3>Next priorities</h3>
+        <p id="plan-next">Crashed first, then the oldest unfinished.</p>
+      </section>
+    </section>
+
+    <section id="view-projects" class="view" data-view-panel="projects" hidden>
+      <header class="proj-head">
+        <div>
+          <p class="kicker">Check for projects</p>
+          <h2>Projects view</h2>
+        </div>
+        <p class="kicker">Check out · cross-harness</p>
+      </header>
+      <div class="proj-body">
+        <ul id="projects" class="proj-list"></ul>
+        <div id="project-cards" class="proj-cards"></div>
+      </div>
+    </section>
+  </div>
+
+  <footer class="foot">
+    <span class="user">User</span>
+    <span id="status">— sessions indexed · — active now · Tokens today —</span>
+    <form id="command-form" class="command-bar">
+      <label class="sr" for="command">Command</label>
+      <input id="command" type="text" placeholder="Find sessions" autocomplete="off" spellcheck="false">
+    </form>
+  </footer>
 </div>
-</div>
+<div id="drive-grid" hidden></div>
+<div id="place-grid" hidden></div>
 <script src="app.js"></script>
 </body>
 </html>

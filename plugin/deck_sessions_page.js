@@ -18,7 +18,7 @@
     if (!host || host.getAttribute("data-sessions-page") === "1") return;
     host.setAttribute("data-sessions-page", "1");
     var bar = document.createElement("div");
-    ["find", "index", "resume"].forEach(function (action) {
+    ["find", "index", "resume", "load", "formats"].forEach(function (action) {
       var btn = document.createElement("button");
       btn.type = "button";
       btn.textContent = action;
@@ -36,7 +36,7 @@
       bar.appendChild(btn);
     });
     host.appendChild(bar);
-    paint(host, "Sessions page tools. Start sessions_page.py serve, then use these buttons.");
+    paint(host, "Sessions page tools. Start sessions_page.py serve, then use these buttons. The installed app is the desk window and does not need this port.");
   }
 
   if (document.readyState === "loading") {

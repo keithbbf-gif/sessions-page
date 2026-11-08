@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Standalone sessions page.
 
     py -3.14 builds/sessions-page/sessions_page.py find
@@ -9,10 +8,13 @@
     py -3.14 builds/sessions-page/sessions_page.py recover --target <file> [--bak <file>] [--apply]
     py -3.14 builds/sessions-page/sessions_page.py resume --id <id> [--launch]
     py -3.14 builds/sessions-page/sessions_page.py serve --port 8786
+    py -3.14 builds/sessions-page/sessions_page.py desk
+    py -3.14 builds/sessions-page/sessions_page.py formats
 
-Loopback only. The page and the CLI are the product. Cosmos Core picks the
-same engine up later through cosmos/cosmos_session_tools_kit.py — already
-imported by the existing /api/v1/session_tools route.
+The frozen no-args exe opens the desk window and does not bind a port.
+`serve` is still the loopback page. Cosmos Core picks the same engine up
+later through cosmos/cosmos_session_tools_kit.py — already imported by the
+existing /api/v1/session_tools route.
 """
 from __future__ import annotations
 
@@ -32,7 +34,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-import engine  # noqa: E402
+import engine
 
 
 def _ui_dir() -> Path:
@@ -100,7 +102,7 @@ def _serve(port: int, open_browser: bool = False) -> int:
 
         def _cors(self) -> None:
             origin = self.headers.get("Origin") or ""
-            if origin.startswith("http://127.0.0.1") or origin.startswith("http://localhost"):
+            if origin.startswith(("http://127.0.0.1", "http://localhost")):
                 self.send_header("Access-Control-Allow-Origin", origin)
                 self.send_header("Vary", "Origin")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -126,13 +128,13 @@ def _serve(port: int, open_browser: bool = False) -> int:
             raw = json.dumps(rec, ensure_ascii=False).encode("utf-8")
             self._send(code, raw, "application/json; charset=utf-8")
 
-        def do_OPTIONS(self) -> None:  # noqa: N802
+        def do_OPTIONS(self) -> None:
             self._send(204, b"", "text/plain")
 
-        def do_GET(self) -> None:  # noqa: N802
+        def do_GET(self) -> None:
             try:
                 self._get()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 self._json(500, {"error": "INTERNAL", "detail": type(exc).__name__})
 
         def _get(self) -> None:
@@ -153,7 +155,7 @@ def _serve(port: int, open_browser: bool = False) -> int:
             kind = "text/css" if file.suffix == ".css" else "text/javascript" if file.suffix == ".js" else "text/html; charset=utf-8"
             self._send(200, file.read_bytes(), kind)
 
-        def do_POST(self) -> None:  # noqa: N802
+        def do_POST(self) -> None:
             path = self.path.split("?", 1)[0]
             if path == "/api/shutdown":
                 self._json(200, {"kind": "OK"})
@@ -185,7 +187,7 @@ def _serve(port: int, open_browser: bool = False) -> int:
             except engine.PageError as exc:
                 self._json(400, {"error": exc.kind, "detail": str(exc)})
                 return
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 self._json(500, {"error": "INTERNAL", "detail": type(exc).__name__})
                 return
             self._json(200, rec)
@@ -217,16 +219,10 @@ def _serve(port: int, open_browser: bool = False) -> int:
 
 
 def _launch_gui(preferred: int = 8786) -> int:
-    """Open the Sessions page. A page that is already up is focused, not started twice."""
-    for port in range(preferred, preferred + 10):
-        if _ours(port):
-            _open_page(port)
-            return 0
-        rc = _serve(port, open_browser=True)
-        if rc == 0:
-            return 0
-    _alert("Sessions could not open a local page on ports 8786–8795.")
-    return 2
+    """Frozen no-args entry. Opens the program window. Does not bind a port."""
+    del preferred
+    import desk
+    return desk.main()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -272,6 +268,8 @@ def main(argv: list[str] | None = None) -> int:
     srv.add_argument("--port", type=int, default=8786)
     srv.add_argument("--no-browser", action="store_true")
     sub.add_parser("verbs")
+    sub.add_parser("desk")
+    sub.add_parser("formats")
 
     args = parser.parse_args(argv)
     try:
@@ -304,6 +302,11 @@ def main(argv: list[str] | None = None) -> int:
                            "legal_omitted": 0})
         if args.cmd == "serve":
             return _serve(args.port, open_browser=not args.no_browser)
+        if args.cmd == "desk":
+            import desk
+            return desk.main()
+        if args.cmd == "formats":
+            return _print(engine.dispatch("formats"))
     except engine.PageError as exc:
         print(json.dumps({"schema": engine.SCHEMA, "verb": args.cmd, "kind": exc.kind,
                           "gate": {"detail": str(exc)}, "legal_omitted": int(exc.kind == "LEGAL_OMITTED")}))

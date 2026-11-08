@@ -1,0 +1,132 @@
+# Handoff — cmSessions — 2026-11-07
+
+Operational. For the next session orchestrator. Do not treat this as a design essay.
+
+## Where the work is
+
+Live code: `V:\a\ai\COSMOS\builds\sessions-page`
+
+`V:\streams\cmsessions` is an older snapshot. Do not edit it. Do not revive it.
+
+Desktop app the user launches: `C:\Users\Papa\OneDrive\Desktop\CM Sessions.exe`
+
+That file matched `dist_desk\sessions_page.exe` at 16:26 on 2026-11-07 (both 13,757,181 bytes). Two older copies are still on the desktop and are the wrong builds. Do not delete them unless Keith says so:
+
+- `CM Sessions ledger.exe` — 16:10, 13,769,873 bytes
+- `CM Sessions sheets.exe` — 15:43, 13,703,646 bytes
+
+Rebuild with:
+
+```
+py -3.14 -m PyInstaller --noconfirm --distpath dist_desk sessions_page.spec
+```
+
+from the live folder. If `CM Sessions.exe` is open, the copy fails. Close it first, then copy `dist_desk\sessions_page.exe` onto the desktop name.
+
+Launch is the native window. `sessions_page.py` with no arguments calls `desk.main()`. It must not open a browser and must not bind a port. `serve` still exists and still binds `127.0.0.1:8786`. Do not point the desktop shortcut at `serve`.
+
+## What this product is
+
+One engine, three shells, in this order:
+
+1. Standalone app first. Native window. No Cosmos required.
+2. The same engine inside COSMOS, in-process, through `V:\a\ai\COSMOS\cosmos\cosmos_session_tools_kit.py`. Do not edit `cosmos_service.py`, `app.js`, or `header.js`.
+3. A plugin for Cosmos Code, through `cosmos_code_hook.py`. Do not copy the engine into `E:\Cosmos_code_repo`. The applied tree `V:\a\ai\COSMOS\cosmos_code` has no `plugins.py`. The snapshot descriptor with an entrypoint is `E:\Cosmos_code_repo\2026-09-30_v2_product_engine\product_cosmos_code\plugins.py`.
+
+cmSessions is not Cosmos and not cDeck. It finds, reads, and resumes local sessions, and the product job is the handoff: carry a transcript into a different installed harness and model. Resume in the same harness is required and is the smaller half. Network and remote sessions are out until the local window and local launch are solid.
+
+## Which drawing wins
+
+Keith's scans override the written design when they conflict.
+
+Master layout: the landscape ledger. Source image: `F:\BROTHER\BRN94DDF88955BC_000643.pdf` page 1 (raster `643-1.png` in the temp scan folder, if it is still there). That sheet is the window.
+
+- Top: Session type (CLI, TUI, Chat), Create summaries, Table view group-by (maker, project, topic), Goals / At-a-glance.
+- Columns: RAN IN, time last active, session title, size / token count, session topics, daily summaries (7 days, week, monthly).
+- Title color follows the source app. Sub-sessions sit under the title.
+- Lower left: the Solaro sun beside the username. Click opens Account and Usage. Usage estimates cost from token counts when a row has them, otherwise from file size divided by 4, using published list prices. It is not a bill. Token Center is not connected.
+
+The portrait drawing labeled TABLE VIEW in red (`F:\BROTHER\BRN94DDF88955BC_000642.pdf`) is a pane inside that ledger, not the frame of the app. The single-session, calendar, and projects drawings are also inside the ledger, not separate pages and not stacked under it all at once.
+
+Written decisions that do not conflict with the scans are in the 2026-11-07 paste in the chat (five jobs: search, list, detail beside a row, status counts, command line; planning is a second view; handoff is the product; no cmSessions subscription; conflict UI is parked). Where that paste says "left rail of filters" and the ledger says "RAN IN", the ledger wins.
+
+## What is actually on screen
+
+`ledger.py` `mount` calls `ledger_master.mount`. `refresh` calls `ledger_master.refresh`.
+
+`ledger_master.py` draws the ledger columns, the header, the daily-summaries column, and the sun menu (`ledger_menu.py`). The center column is a title list. Group by maker, project, or topic re-sorts that list. It does not yet swap the center into the project-card drawing or the calendar drawing. Clicking a title calls `desk._select`. It does not yet replace the center with the single-session drawing.
+
+`desk.py` still builds the older Overview / Sessions / Formats / Recover / Tools frames, then hides them and covers the stage with the ledger. Those actions still exist and are reachable from the Table View pane's More menu when that pane is the one mounted. Confirm which buttons the current `ledger_master.py` header actually shows before telling Keith they are on screen. Create summaries is on the header and does not call a model.
+
+First open: `desk.py` paints a saved index off the UI thread, then `find(enrich=False)`. `read_saved_index` is on `engine.py`. Codex rollout scan is limited to `sessions\` under the Codex home. Do not put a full store walk back on the Tk thread.
+
+## Local find / read / launch
+
+`engine.py` walks the vendor stores. Legal rows are counted and not opened. OpenWork text is in `part.data`. Hermes reads `messages` one session at a time. Codex uses a `.jsonl.zst` sibling when the plain file is gone. Antigravity list comes from `conversation_summaries` and `conversations\*.db`. A missing store is null, not zero.
+
+`engine.resume` launches the known CLI flags. Harnesses with a binary but no resume-id flag start that binary in the project folder. Cline task files that are not `*.messages.json` stay `UNMEASURED`. OpenWork and Cowork stay `OPENWORK_FOCUS` and do not spawn `OpenWork.exe`.
+
+`engine.installed_launchers()` is the list of binaries found on this machine. A harness that is not installed must be hidden, not shown as a dead button. That hide is not finished in the ledger header.
+
+## Tests last known green
+
+From `V:\a\ai\COSMOS\builds\sessions-page`, on 2026-11-07, before the last layout rewrite:
+
+- `test_sessions_page.py` 68/68
+- `test_desk.py` 21/21
+- `test_store_fixes.py` 9/9 then 11/11 after the Antigravity payload test
+- `test_record.py` 10/10
+- `test_formats.py` ok, 34 records
+
+Re-run `test_desk.py` and `test_sessions_page.py` after the next layout edit. Do not claim they are still green until you have run them.
+
+## Do not
+
+- Do not open the product in a browser or bind a port for the desktop app.
+- Do not make Table, Session, Calendar, and Projects into separate pages or a left-hand app nav.
+- Do not stack all four drawings on one screen at once.
+- Do not fork the engine per shell.
+- Do not edit `cosmos_service.py`, `app.js`, or `header.js`.
+- Do not write analysis into `V:\Ai\BU.MD`. It is operational state for BootUP. This session did not overwrite it.
+- Do not write `V:\Research4\BU.MD`.
+- Do not auto-delete the older desktop exes.
+- Do not add a cmSessions subscription. Token Center is the account, and only when an AI feature is used.
+- Do not implement the conflict UI, the unattended mesh, or network sessions yet.
+
+## Next session, in order
+
+1. Make the running window match the landscape ledger drawing. Header and six columns and the sun, as above. Check it by opening the exe, not by describing the code.
+2. Put the Table View drawing inside the session-title column only: column chips, More, search, print, topic list. Do not let that drawing become the window.
+3. A clicked row opens the single-session drawing in that same center column: date, start, end, size, tokens, path, keywords, Resume, the harness, the model, session text, session preview. Resume launches the source harness. Hand off and cross-check stay separate. Nothing launches by itself.
+4. Group by project shows the project cards in that center column. Calendar shows in that center column. RAN IN, time, size, and daily summaries stay visible.
+5. Hide harnesses whose binary is not installed. Carry the indexed transcript on handoff. Record the new session as a child. Do not close the source.
+6. Re-run the hermetic tests. Rebuild `dist_desk\sessions_page.exe`. Copy it to `CM Sessions.exe` only after the old process is closed.
+
+## 2026-11-08 — Table View window (642)
+
+Keith chose the 642 TABLE VIEW scan as the main layout, overriding the
+landscape-ledger frame. `ledger_master.py` was rewritten to it:
+
+- Nav: Home, DRIVES, SESSIONS, session-tab carousel with < >, Maker
+  filter ("Drop Down By Maker"), Group menu (Flat / maker / project /
+  topic), Proj / Token count / Cost / TAG column toggles, More menu,
+  Create summaries (still does not call a model).
+- Red-ruled heads: TOPICS, session Summaries, Proj, Token count, cost $, TAG.
+- Body: left list (titles + ages, or drives when DRIVES is scoped),
+  center TABLE VIEW, right Daily / Weekly / Monthly / Quarterly, rail
+  with SAVE AS, LOAD OPEN, search, calendar, Project folder View, Print.
+- Footer: Solaro sun + username (Account and Usage menu), status line,
+  "estimates, not a bill" note. Costs use published list prices from
+  token counts, else bytes / 4.
+- Clicking a left, center, or tab row opens the single-session drawing
+  in the center column. Calendar and projects also render in the center.
+
+Rebuilt `dist_desk\sessions_page.exe` and copied it over
+`CM Sessions.exe` (13,784,046 bytes). Older desktop copies untouched.
+Tests after the edit: test_desk 21/21, test_sessions_page 68/68,
+test_store_fixes 11/11, test_record 10/10, test_formats ok. Exe launch
+checked: process stayed up with a live window, then closed.
+
+## TidyUP2 leftovers
+
+`tidyup2_checks.py` and `tidyup2_full.py` look for `V:\Research4\Ai\ROLD\SCARS.md` and `V:\Research4\Ai\BTS_MESH\TOOLS_REGISTRY.json`. Those paths are missing. The live files are `V:\a\ai\BTS_MESH\ROLD\SCARS.md` and `V:\a\ai\BTS_MESH\BTS_MESH\TOOLS_REGISTRY.json`. No new class was appended to SCARS. The checkers were not patched.
