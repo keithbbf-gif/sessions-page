@@ -11,8 +11,9 @@
     py -3.14 builds/sessions-page/sessions_page.py desk
     py -3.14 builds/sessions-page/sessions_page.py formats
 
-The frozen no-args exe opens the desk window and does not bind a port.
-`serve` is still the loopback page. Cosmos Core picks the same engine up
+The frozen no-args exe opens the modern Full Screen UI in a standalone window.
+`desk` opens the native Tkinter desk window.
+`serve` runs the loopback page. Cosmos Core picks the same engine up
 later through cosmos/cosmos_session_tools_kit.py — already imported by the
 existing /api/v1/session_tools route.
 """
@@ -71,7 +72,21 @@ def _ours(port: int) -> bool:
 
 
 def _open_page(port: int) -> None:
-    webbrowser.open(f"http://127.0.0.1:{port}/")
+    url = f"http://127.0.0.1:{port}/"
+    if os.name == "nt":
+        edge_candidates = [
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        ]
+        for ep in edge_candidates:
+            if os.path.exists(ep):
+                try:
+                    import subprocess
+                    subprocess.Popen([ep, f"--app={url}"])
+                    return
+                except Exception:
+                    pass
+    webbrowser.open(url)
 
 
 def _alert(text: str) -> None:
@@ -230,10 +245,16 @@ def _serve(port: int, open_browser: bool = False) -> int:
 
 
 def _launch_gui(preferred: int = 8786) -> int:
-    """Frozen no-args entry. Opens the program window. Does not bind a port."""
-    del preferred
-    import desk
-    return desk.main()
+    """Open the Sessions page. A page that is already up is focused, not started twice."""
+    for port in range(preferred, preferred + 10):
+        if _ours(port):
+            _open_page(port)
+            return 0
+        rc = _serve(port, open_browser=True)
+        if rc == 0:
+            return 0
+    _alert("Sessions could not open a local page on ports 8786–8795.")
+    return 2
 
 
 def main(argv: list[str] | None = None) -> int:
