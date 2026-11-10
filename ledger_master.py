@@ -1144,14 +1144,6 @@ def _show_body(desk, name: str) -> None:
                     desk._ledger_errors = errors
                 errors.append(f"{builder}: {type(exc).__name__}: {exc}")
         frames[name] = frame
-        if name in ("calendar", "projects"):
-            try:
-                mod = __import__(builder)
-                fn = getattr(mod, "refresh", None)
-                if callable(fn):
-                    fn(desk, getattr(desk, "hits", []) or [])
-            except Exception:
-                pass
     for key, frame in frames.items():
         try:
             if key == name:
@@ -1160,7 +1152,19 @@ def _show_body(desk, name: str) -> None:
                 frame.pack_forget()
         except Exception:
             pass
-    if name == "session":
+    if name in ("calendar", "projects"):
+        builder = {"calendar": "ledger_calendar", "projects": "ledger_projects"}.get(name)
+        if builder:
+            try:
+                import sys
+
+                mod = sys.modules.get(builder) or __import__(builder)
+                fn = getattr(mod, "refresh", None)
+                if callable(fn):
+                    fn(desk, getattr(desk, "hits", []) or [])
+            except Exception:
+                pass
+    elif name == "session":
         hit = None
         rows = getattr(desk, "hits", None) or []
         index = getattr(desk, "selected_index", None)

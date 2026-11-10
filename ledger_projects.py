@@ -56,6 +56,30 @@ def build(parent, desk) -> None:
         font=("Segoe UI", 18, "bold"),
     ).pack(anchor="w")
 
+    def _back():
+        show = getattr(desk, "show_ledger_body", None)
+        if callable(show):
+            show("table")
+
+    tk.Button(
+        titles,
+        text="← Back to Table",
+        command=_back,
+        bg=_CARD,
+        fg=_INK,
+        activebackground="#1E2430",
+        activeforeground=_INK,
+        relief="flat",
+        bd=0,
+        highlightthickness=1,
+        highlightbackground="#2A3140",
+        highlightcolor="#7C9CFF",
+        font=("Segoe UI", -12, "bold"),
+        padx=10,
+        pady=3,
+        cursor="hand2",
+    ).pack(anchor="w", pady=(4, 0))
+
     right_head = tk.Frame(head, bg=_BG, highlightthickness=0, bd=0)
     right_head.pack(side="right", anchor="ne")
     tk.Label(

@@ -90,8 +90,12 @@ def _serve(port: int, open_browser: bool = False) -> int:
     allow = {
         "/": ui / "index.html",
         "/index.html": ui / "index.html",
+        "/index_classic.html": ui / "index_classic.html",
         "/app.js": ui / "app.js",
         "/app.css": ui / "app.css",
+        "/cmsessions_fullscreen.png": ui / "cmsessions_fullscreen.png",
+        "/cmsessions_calendar_fullscreen.png": ui / "cmsessions_calendar_fullscreen.png",
+        "/cmsessions_calendar_week_fullscreen.png": ui / "cmsessions_calendar_week_fullscreen.png",
     }
 
     class Handler(BaseHTTPRequestHandler):
@@ -152,7 +156,14 @@ def _serve(port: int, open_browser: bool = False) -> int:
             if file is None or not file.is_file():
                 self._json(404, {"kind": "NOT_FOUND", "path": path})
                 return
-            kind = "text/css" if file.suffix == ".css" else "text/javascript" if file.suffix == ".js" else "text/html; charset=utf-8"
+            if file.suffix == ".css":
+                kind = "text/css"
+            elif file.suffix == ".js":
+                kind = "text/javascript"
+            elif file.suffix == ".png":
+                kind = "image/png"
+            else:
+                kind = "text/html; charset=utf-8"
             self._send(200, file.read_bytes(), kind)
 
         def do_POST(self) -> None:

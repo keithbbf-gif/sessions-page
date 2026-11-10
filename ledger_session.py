@@ -111,11 +111,37 @@ def build(parent, desk) -> None:
     top.pack(fill="x")
     line = tk.Frame(top, bg=_BG)
     line.pack(fill="x")
+
+    def _back():
+        show = getattr(desk, "show_ledger_body", None)
+        if callable(show):
+            show("table")
+
+    btn_back = tk.Button(
+        line,
+        text="← Back to Table",
+        command=_back,
+        bg=_CARD,
+        fg=_INK,
+        activebackground="#1E2430",
+        activeforeground=_INK,
+        relief="flat",
+        bd=0,
+        highlightthickness=1,
+        highlightbackground="#2A3140",
+        highlightcolor=_ACCENT,
+        font=("Segoe UI", -12, "bold"),
+        padx=10,
+        pady=3,
+        cursor="hand2",
+    )
+    btn_back.pack(side="left", padx=(12, 6), pady=4)
+
     app = tk.Label(
         line, text="App", fg=_ACCENT, bg=_BG, anchor="w",
         font=("Segoe UI", 14, "bold"),
     )
-    app.pack(side="left", padx=(12, 8), pady=4)
+    app.pack(side="left", padx=(4, 8), pady=4)
     bag["app"] = app
     facts = tk.Frame(top, bg=_BG)
     facts.pack(fill="x")

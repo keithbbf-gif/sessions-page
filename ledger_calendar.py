@@ -296,14 +296,42 @@ def build(parent, desk) -> None:
             child.destroy()
     except tk.TclError:
         pass
+    cal_head = tk_mod.Frame(parent, bg=_BG)
+    cal_head.pack(fill="x", padx=16, pady=(12, 4))
+
+    def _back():
+        show = getattr(desk, "show_ledger_body", None)
+        if callable(show):
+            show("table")
+
+    btn_back = tk_mod.Button(
+        cal_head,
+        text="← Back to Table",
+        command=_back,
+        bg=_CELL,
+        fg=_INK,
+        activebackground="#1E2430",
+        activeforeground=_INK,
+        relief="flat",
+        bd=0,
+        highlightthickness=1,
+        highlightbackground="#2A3140",
+        highlightcolor="#7C9CFF",
+        font=("Segoe UI", -12, "bold"),
+        padx=10,
+        pady=3,
+        cursor="hand2",
+    )
+    btn_back.pack(side="right", padx=(8, 0))
+
     tk_mod.Label(
-        parent,
+        cal_head,
         text="Calendar view",
         fg=_INK,
         bg=_BG,
         font=_FONT_TITLE,
         anchor="w",
-    ).pack(fill="x", padx=16, pady=(12, 4))
+    ).pack(side="left")
     hosts = {}
     for key in ("search", "month", "plans", "foot"):
         frame = tk_mod.Frame(parent, bg=_BG)
