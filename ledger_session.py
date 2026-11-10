@@ -109,18 +109,20 @@ def build(parent, desk) -> None:
 
     top = tk.Frame(parent, bg=_BG)
     top.pack(fill="x")
+    line = tk.Frame(top, bg=_BG)
+    line.pack(fill="x")
     app = tk.Label(
-        top, text="App", fg=_ACCENT, bg=_BG, anchor="w",
+        line, text="App", fg=_ACCENT, bg=_BG, anchor="w",
         font=("Segoe UI", 14, "bold"),
     )
     app.pack(side="left", padx=(12, 8), pady=4)
     bag["app"] = app
     facts = tk.Frame(top, bg=_BG)
-    facts.pack(side="left", fill="both", expand=True)
-    chain = tk.Frame(top, bg=_BG)
+    facts.pack(fill="x")
+    chain = tk.Frame(line, bg=_BG)
     chain.pack(side="left", fill="y")
     keys = tk.Frame(top, bg=_BG)
-    keys.pack(side="left", fill="both", expand=True)
+    keys.pack(fill="x")
 
     panes = tk.Frame(parent, bg=_BG)
     panes.pack(fill="both", expand=True)
@@ -170,7 +172,7 @@ def _draw_facts(parent, desk) -> None:
     tk = _tk(desk)
     label = tk.Label(
         parent, text=_empty_facts(), fg="#A7B0C3", bg=_BG, anchor="w",
-        justify="left", font=("Segoe UI", 11), wraplength=640,
+        justify="left", font=("Segoe UI", 11), wraplength=700,
     )
     label.pack(side="left", fill="x", expand=True, padx=8, pady=4)
     desk.ledger_session_facts = label
@@ -202,7 +204,8 @@ def _draw_keywords(parent, desk) -> None:
     tk = _tk(desk)
     desk.ledger_keywords = tk.Label(
         parent, text=f"Location {_DASH}    Keywords {_DASH}",
-        fg="#A7B0C3", bg=_BG, anchor="w", justify="left", font=_FONT, padx=8, pady=4,
+        fg="#A7B0C3", bg=_BG, anchor="w", justify="left", font=_FONT,
+        wraplength=700, padx=8, pady=4,
     )
     desk.ledger_keywords.pack(fill="x")
 

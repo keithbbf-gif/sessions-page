@@ -1642,11 +1642,28 @@ class _Desk:
         self.d_meta.configure(text="   ·   ".join(bit for bit in bits if bit))
         self._set_app_choices(hit)
 
-    def _set_app_choices(self, hit: dict) -> None:
-        harness = str(hit.get("harness") or "")
-        choices = list(RESUME_APPS)
+    def _installed_choices(self, harness: str) -> list[str]:
+        """Harnesses with a binary on this machine, plus the source harness so
+        same-harness Resume can still plan. Uninstalled targets are hidden."""
+        try:
+            installed = [name for name, _path in engine.installed_launchers()]
+        except Exception:
+            return list(RESUME_APPS) + ([harness] if harness else [])
+        choices = [name for name in installed if name in _FAMILY]
+        for name in installed:
+            if name not in choices:
+                choices.append(name)
         if harness and harness not in choices:
             choices.append(harness)
+        return choices
+
+    def _set_app_choices(self, hit: dict) -> None:
+        harness = str(hit.get("harness") or "")
+        choices = self._installed_choices(harness)
+        if not choices:
+            choices = list(RESUME_APPS)
+            if harness and harness not in choices:
+                choices.append(harness)
         menu = self.app_box["menu"]
         menu.delete(0, "end")
         for choice in choices:
@@ -1761,6 +1778,26 @@ class _Desk:
 
         self._guard(go)
 
+    def _on_handoff(self) -> None:
+        hit = self._need_hit()
+        if hit is None:
+            return
+        app = self._picked_app(hit)
+        harness = str(hit.get("harness") or "")
+        if harness and _family(app) == _family(harness):
+            self._say(
+                f"Hand off moves harnesses. {harness} stays on Resume — "
+                "pick another installed target to move it.",
+                "warn",
+            )
+            self._show(plan_resume(hit, app))
+            return
+        plan = plan_foreign_launch(hit, app)
+        if plan.get("kind") != "HANDOFF":
+            self._show(plan)
+            return
+        self._guard(lambda: self._start_handoff(hit, plan))
+
     def _start_handoff(self, hit: dict, plan: dict) -> None:
         """Export, then start the bare app. No -p and no session id."""
         exported = engine.dispatch("export", {"id": str(hit.get("id") or "")})
@@ -1774,11 +1811,26 @@ class _Desk:
         flags = subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0
         proc = subprocess.Popen([binary], cwd=cwd, creationflags=flags, close_fds=True)
         gate = exported.get("gate") if isinstance(exported.get("gate"), dict) else {}
+        record_path = ""
+        try:
+            rec = engine.record_handoff({
+                "parent": str(hit.get("id") or ""),
+                "parent_harness": str(hit.get("harness") or ""),
+                "target": str(plan.get("app") or ""),
+                "binary": binary,
+                "pid": proc.pid,
+                "export": gate.get("out") or "",
+                "cwd": cwd or "",
+            })
+            record_path = rec.get("path") or ""
+        except Exception as exc:  # noqa: BLE001 — a launched handoff must still report
+            record_path = f"UNWRITTEN: {type(exc).__name__}: {exc}"
         self._show({
             "kind": "HANDOFF",
             "export": gate.get("out") or "",
             "argv": [binary],
             "pid": proc.pid,
+            "handoff_record": record_path,
             "export_result": exported,
         })
 

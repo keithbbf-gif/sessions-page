@@ -85,6 +85,34 @@ def _load(homes: dict, rec_id: str) -> dict:
     return engine.dispatch("load", {"id": rec_id}, homes=homes)
 
 
+def case_record_handoff(tmp_path: Path) -> None:
+    entry = {
+        "parent": "hit-1",
+        "parent_harness": "claude",
+        "target": "grok",
+        "binary": r"C:\bin\grok.exe",
+        "pid": 1234,
+        "export": str(tmp_path / "exports" / "hit-1.md"),
+        "cwd": r"V:\work",
+    }
+    first = engine.record_handoff(entry, root=tmp_path)
+    path = Path(str(first.get("path") or ""))
+    if path.parent != tmp_path or path.name != "handoffs.jsonl" or not path.is_file():
+        raise AssertionError(f"handoff record not at tmp root: {first!r}")
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if len(lines) != 1:
+        raise AssertionError(f"handoff lines {len(lines)}")
+    row = json.loads(lines[0])
+    for key in ("parent", "parent_harness", "target", "binary", "pid", "export", "cwd"):
+        if row.get(key) != entry[key]:
+            raise AssertionError(f"handoff field {key} not carried: {row!r}")
+    if row.get("schema") != engine.HANDOFF_SCHEMA:
+        raise AssertionError(f"handoff schema missing: {row!r}")
+    engine.record_handoff(None, root=tmp_path)
+    if len(path.read_text(encoding="utf-8").splitlines()) != 2:
+        raise AssertionError("second handoff line not appended")
+
+
 def case_openwork_short(tmp_path: Path) -> None:
     sid = "s1"
     db = tmp_path / "ow" / "opencode.db"
@@ -431,6 +459,7 @@ def main() -> int:
     failed: list[str] = []
     passed = 0
     cases = (
+        ("handoff record carries parent target pid export", case_record_handoff),
         ("openwork find ow-id and load n_turns 2", case_openwork_short),
         ("openwork 2001 messages TRUNCATED n_turns 2000", case_openwork_truncated),
         ("hermes sessions-only load raises UNMEASURED", case_hermes_unmeasured),

@@ -377,6 +377,13 @@ def _open_hit(desk, hit: dict) -> None:
 
 def mount(desk, stage):
     tk = desk.tk
+    try:
+        ttk_mod = getattr(desk, "ttk", None)
+        if ttk_mod is None:
+            from tkinter import ttk as ttk_mod
+        ttk_mod.Style().theme_use("clam")
+    except Exception:
+        pass
     stage.configure(bg=BG)
     if not getattr(desk, "ledger_group", None):
         desk.ledger_group = "flat"
@@ -417,6 +424,8 @@ def mount(desk, stage):
     rail = tk.Frame(body, bg=CARD)
     rail.grid(row=0, column=3, sticky="nsew", padx=(4, 8), pady=8)
     desk.ledger_center = center
+    desk.ledger_right = right
+    desk.ledger_rail = rail
 
     _mount_left(desk, tk, left)
     _mount_table_frame(desk, tk, center)
@@ -506,19 +515,183 @@ def _mount_heads(desk, tk, root):
     grid.grid_columnconfigure(3, weight=0, minsize=150)
     tk.Label(grid, text="TOPICS", fg=INK, bg=BG, anchor="w",
              font=("Segoe UI", -13, "bold")).grid(row=0, column=0, sticky="ew", padx=(0, 4))
-    mid = tk.Frame(grid, bg=BG)
-    mid.grid(row=0, column=1, sticky="ew", padx=4)
-    for i, (text, weight) in enumerate((("session Summaries", 280), ("Proj", 110),
-                                        ("Tokens", 90), ("cost $", 80), ("TAG", 120))):
-        mid.grid_columnconfigure(i, weight=weight)
-        tk.Label(mid, text=text, fg=INK, bg=BG, anchor="w",
-                 font=("Segoe UI", -13, "bold")).grid(row=0, column=i, sticky="ew", padx=4)
     tk.Label(grid, text="Summaries", fg=INK, bg=BG, anchor="w",
              font=("Segoe UI", -13, "bold")).grid(row=0, column=2, sticky="ew", padx=(4, 0))
-    tk.Label(grid, text="Actions", fg=QUIET, bg=BG, anchor="w",
-             font=("Segoe UI", -12)).grid(row=0, column=3, sticky="ew", padx=(4, 0))
     tk.Frame(wrap, bg=RED, height=2).pack(fill="x", padx=8, pady=(2, 0))
     return wrap
+
+
+class _Bar:
+    """Minimal dark scrollbar. ttk.Scrollbar would not take the theme."""
+
+    def __init__(self, tk, parent, tree):
+        self.tk = tk
+        self.tree = tree
+        self.lo, self.hi = 0.0, 1.0
+        self._grab_y = None
+        self._grab_lo = 0.0
+        cv = tk.Canvas(parent, width=14, bg=CARD, highlightthickness=0, bd=0,
+                       relief="flat", cursor="hand2")
+        cv.pack(side="right", fill="y")
+        self.cv = cv
+        self.trough = cv.create_rectangle(0, 0, 14, 8, fill=CARD, outline="")
+        self.thumb = cv.create_rectangle(2, 0, 12, 24, fill="#1E2430", outline="")
+        cv.bind("<Configure>", lambda _e: self.paint())
+        cv.bind("<Button-1>", self._click)
+        cv.bind("<B1-Motion>", self._drag)
+        cv.bind("<Enter>", lambda _e: self._hover(True))
+        cv.bind("<Leave>", lambda _e: self._hover(False))
+        tree.configure(yscrollcommand=self._set)
+        tree.bind("<MouseWheel>", lambda e: self._wheel(e), add="+")
+
+    def _set(self, lo, hi):
+        try:
+            self.lo, self.hi = float(lo), float(hi)
+        except (TypeError, ValueError):
+            self.lo, self.hi = 0.0, 1.0
+        self.paint()
+
+    def paint(self):
+        try:
+            h = self.cv.winfo_height()
+        except Exception:
+            return
+        if h < 8:
+            return
+        self.cv.coords(self.trough, 0, 0, 14, h)
+        if self.hi - self.lo >= 0.999:
+            self.cv.itemconfigure(self.thumb, state="hidden")
+            return
+        self.cv.itemconfigure(self.thumb, state="normal")
+        top = max(0, int(self.lo * h))
+        bot = min(h, max(top + 24, int(self.hi * h)))
+        self.cv.coords(self.thumb, 2, top, 12, bot)
+
+    def _hover(self, on: bool) -> None:
+        try:
+            self.cv.itemconfigure(self.thumb, fill=ACCENT if on else "#1E2430")
+        except Exception:
+            pass
+
+    def _click(self, event) -> None:
+        try:
+            y = event.y
+            h = self.cv.winfo_height() or 1
+            top = self.lo * h
+            bot = self.hi * h
+            if top <= y <= bot:
+                self._grab_y = y
+                self._grab_lo = self.lo
+            elif y < top:
+                self.tree.yview("scroll", -1, "pages")
+            else:
+                self.tree.yview("scroll", 1, "pages")
+        except Exception:
+            pass
+
+    def _drag(self, event) -> None:
+        if self._grab_y is None:
+            return
+        try:
+            h = self.cv.winfo_height() or 1
+            frac = self._grab_lo + (event.y - self._grab_y) / h
+            self.tree.yview("moveto", max(0.0, min(1.0, frac)))
+        except Exception:
+            pass
+
+    def _wheel(self, event) -> None:
+        try:
+            steps = int(event.delta // 120) if event.delta else 0
+            if steps:
+                self.tree.yview_scroll(-steps, "units")
+        except Exception:
+            pass
+
+
+class _Tip:
+    """Hover tooltip showing the full row text that the column clips."""
+
+    def __init__(self, tk, tree, text_of):
+        self.tk = tk
+        self.tree = tree
+        self.text_of = text_of
+        self.win = None
+        self.after = None
+        tree.bind("<Motion>", self._motion, add="+")
+        tree.bind("<Leave>", lambda _e: self.hide(), add="+")
+        tree.bind("<Button-1>", lambda _e: self.hide(), add="+")
+        tree.bind("<MouseWheel>", lambda _e: self.hide(), add="+")
+
+    def hide(self) -> None:
+        if self.after is not None:
+            try:
+                self.tree.after_cancel(self.after)
+            except Exception:
+                pass
+            self.after = None
+        if self.win is not None:
+            try:
+                self.win.destroy()
+            except Exception:
+                pass
+            self.win = None
+
+    def _motion(self, event) -> None:
+        self.hide()
+        try:
+            iid = self.tree.identify_row(event.y)
+        except Exception:
+            return
+        if not iid or iid.startswith("g-") or iid.startswith("d-"):
+            return
+        hit = getattr(self.tree, "_ledger_rows", {}).get(iid)
+        if hit is None:
+            return
+        try:
+            text = self.text_of(hit)
+        except Exception:
+            return
+        if not text:
+            return
+        try:
+            x, y = event.x_root + 14, event.y_root + 12
+            self.after = self.tree.after(350, lambda: self._show(text, x, y))
+        except Exception:
+            pass
+
+    def _show(self, text: str, x: int, y: int) -> None:
+        self.after = None
+        self.hide()
+        try:
+            win = self.tk.Toplevel(self.tree)
+            win.wm_overrideredirect(True)
+            win.wm_geometry(f"+{x}+{y}")
+            label = self.tk.Label(win, text=text, fg=INK, bg="#1E2430",
+                                  font=("Segoe UI", -12), padx=10, pady=6,
+                                  wraplength=420, justify="left")
+            label.pack()
+            win.after(3000, self.hide)
+            self.win = win
+        except Exception:
+            pass
+
+
+def _left_tip_text(hit) -> str:
+    if isinstance(hit, dict):
+        bits = [title_of(hit), age_text(hit.get("updated"))]
+        proj = project_of(hit)
+        if proj:
+            bits.append(proj)
+        return "  ·  ".join(b for b in bits if b)
+    return str(hit or "")
+
+
+def _table_tip_text(hit) -> str:
+    if not isinstance(hit, dict):
+        return ""
+    return "  ·  ".join(part for part in (
+        title_of(hit), project_of(hit), _tokens_text(hit),
+        _cost_text(hit), source_label(hit)) if part and part != EM)
 
 
 def _mount_left(desk, tk, parent):
@@ -527,17 +700,16 @@ def _mount_left(desk, tk, parent):
         from tkinter import ttk
     style = ttk.Style(parent)
     _style_tree(style)
-    tree = ttk.Treeview(parent, columns=("row",), show="", style="Cm.Left.Treeview",
+    tree = ttk.Treeview(parent, columns=("title", "age"), show="", style="Cm.Left.Treeview",
                         selectmode="browse")
-    tree.column("row", anchor="w", stretch=True, minwidth=60)
+    tree.column("title", anchor="w", stretch=True, minwidth=60)
+    tree.column("age", anchor="e", stretch=False, width=64, minwidth=56)
     tree.tag_configure("group", foreground=QUIET)
-    bar = ttk.Scrollbar(parent, orient="vertical", command=tree.yview,
-                        style="Cm.Left.Vertical.TScrollbar")
-    tree.configure(yscrollcommand=bar.set)
-    bar.pack(side="right", fill="y")
+    _Bar(tk, parent, tree)
     tree.pack(side="left", fill="both", expand=True)
     tree._ledger_rows = {}
     tree.bind("<<TreeviewSelect>>", lambda _e: _open_left(desk))
+    _Tip(tk, tree, _left_tip_text)
     desk.ledger_left = tree
     desk.ledger_ran = parent
     desk.ledger_times = parent
@@ -556,19 +728,17 @@ def _mount_table_frame(desk, tk, center):
         columns=("title", "proj", "tokens", "cost", "tag"),
         show="headings", style="Cm.Table.Treeview", selectmode="browse",
     )
-    heads = (("title", "session Summaries", 280), ("proj", "Proj", 110),
-             ("tokens", "Tokens", 90), ("cost", "cost $", 80), ("tag", "TAG", 120))
+    heads = (("title", "session Summaries", 280), ("proj", "Proj", 125),
+             ("tokens", "Tokens", 90), ("cost", "cost $", 80), ("tag", "TAG", 130))
     for key, text, width in heads:
         tree.heading(key, text=text, anchor="w")
         tree.column(key, width=width, minwidth=40, anchor="w", stretch=(key == "title"))
     tree.tag_configure("group", foreground=QUIET)
-    bar = ttk.Scrollbar(frame, orient="vertical", command=tree.yview,
-                        style="Cm.Table.Vertical.TScrollbar")
-    tree.configure(yscrollcommand=bar.set)
-    bar.pack(side="right", fill="y")
+    _Bar(tk, frame, tree)
     tree.pack(side="left", fill="both", expand=True)
     tree._ledger_rows = {}
     tree.bind("<<TreeviewSelect>>", lambda _e: _open_table(desk))
+    _Tip(tk, tree, _table_tip_text)
     desk.ledger_tree = tree
     desk.ledger_table_frame = frame
     desk.ledger_body_frames["table"] = frame
@@ -578,15 +748,13 @@ def _mount_table_frame(desk, tk, center):
 
 
 def _style_tree(style) -> None:
-    try:
-        style.theme_use("clam")
-    except Exception:
-        pass
     style.configure("Cm.Left.Treeview", background=CARD, fieldbackground=CARD,
                     foreground=INK, borderwidth=0, relief="flat", rowheight=30,
+                    bordercolor=CARD, lightcolor=CARD, darkcolor=CARD,
                     font=("Segoe UI", -13))
     style.configure("Cm.Table.Treeview", background=CARD, fieldbackground=CARD,
                     foreground=INK, borderwidth=0, relief="flat", rowheight=30,
+                    bordercolor=CARD, lightcolor=CARD, darkcolor=CARD,
                     font=("Segoe UI", -13))
     style.configure("Cm.Left.Treeview.Heading", background=BG, foreground=QUIET,
                     relief="flat", borderwidth=0, font=("Segoe UI", -12))
@@ -596,10 +764,6 @@ def _style_tree(style) -> None:
               foreground=[("selected", INK)])
     style.map("Cm.Table.Treeview", background=[("selected", "#1E2430")],
               foreground=[("selected", INK)])
-    style.configure("Cm.Left.Vertical.TScrollbar", background="#1E2430",
-                    troughcolor=CARD, bordercolor=CARD, arrowcolor=QUIET)
-    style.configure("Cm.Table.Vertical.TScrollbar", background="#1E2430",
-                    troughcolor=CARD, bordercolor=CARD, arrowcolor=QUIET)
 
 
 def _mount_right(desk, tk, parent):
@@ -620,7 +784,7 @@ def _mount_right(desk, tk, parent):
 
 
 def _daily_block(tk, parent):
-    box = tk.Text(parent, height=4, bg=CARD, fg="#A7B0C3", relief="flat",
+    box = tk.Text(parent, height=4, width=22, bg=CARD, fg="#A7B0C3", relief="flat",
                   wrap="word", font=("Segoe UI", -12),
                   highlightthickness=0, bd=0, padx=4, pady=2)
     box.pack(fill="x", padx=10, pady=(2, 0))
@@ -641,7 +805,7 @@ def _mount_rail(desk, tk, parent):
     if var is None or not hasattr(var, "get"):
         var = tk.StringVar(value="")
         desk.query = var
-    entry = tk.Entry(row, textvariable=var, bg=BG, fg=INK, insertbackground=INK,
+    entry = tk.Entry(row, textvariable=var, bg="#1E2430", fg=INK, insertbackground=INK,
                      relief="flat", font=("Segoe UI", -13),
                      highlightthickness=1, highlightbackground=LINE,
                      highlightcolor=ACCENT)
@@ -1187,13 +1351,13 @@ def paint_left(desk, rows: list) -> None:
             text = f"{letter}  {label}{free}".strip()
             iid = f"d-{n}"
             try:
-                tree.insert("", "end", iid=iid, values=(text,))
+                tree.insert("", "end", iid=iid, values=(text, ""))
             except Exception:
                 continue
             tree._ledger_rows[iid] = text or "Drive."
         if not getattr(desk, "ledger_drives", None):
             try:
-                tree.insert("", "end", iid="d-hint", values=("Reading drives…",))
+                tree.insert("", "end", iid="d-hint", values=("Reading drives…", ""))
             except Exception:
                 pass
         return
@@ -1208,20 +1372,20 @@ def paint_left(desk, rows: list) -> None:
                 n += 1
                 base = f"h-row-{n}"
         seen.add(base)
-        text = f"{title_of(hit)}  {age_text(hit.get('updated'))}"
+        text = title_of(hit)
         tag = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in _harness(hit).lower()) or "other"
         try:
             tree.tag_configure(tag, foreground=vendor_color(_harness(hit)))
         except Exception:
             pass
         try:
-            tree.insert("", "end", iid=base, values=(text,), tags=(tag,))
+            tree.insert("", "end", iid=base, values=(text, age_text(hit.get("updated"))), tags=(tag,))
         except Exception:
             continue
         tree._ledger_rows[base] = hit
 
 
-def _short(text: str, width: int = 16) -> str:
+def _short(text: str, width: int = 24) -> str:
     text = " ".join(str(text).split())
     return text if len(text) <= width else text[: max(0, width - 1)] + "…"
 

@@ -125,7 +125,66 @@ Rebuilt `dist_desk\sessions_page.exe` and copied it over
 `CM Sessions.exe` (13,784,046 bytes). Older desktop copies untouched.
 Tests after the edit: test_desk 21/21, test_sessions_page 68/68,
 test_store_fixes 11/11, test_record 10/10, test_formats ok. Exe launch
-checked: process stayed up with a live window, then closed.
+Exe launch checked: process stayed up with a live window, then closed.
+
+## 2026-11-08 — render loop to match (642)
+
+Rendered the window headless-style (visible Tk + screenshots) and
+iterated until the pixels matched the sketch:
+
+- Nav overflow pushed Create summaries / More off-screen: session tabs
+  moved to their own strip; toggles shortened (Tokens, Cost).
+- White voids under the lists: clam theme was applied but a second
+  `theme_use("clam")` reset widgets built before it, leaving classic
+  white scrollbars. Fix: theme set once in `mount`, then a custom
+  dark canvas scrollbar (`_Bar`: drag, trough paging, wheel) replaced
+  ttk.Scrollbar entirely. Also added `bordercolor` so tree borders
+  stay dark.
+- Duplicated headers: removed the global center labels, the tree's
+  own headings carry TOPICS columns now; red rule stays above them.
+- Center showed 3 of 5 columns: `tk.Text` summary boxes requested 80
+  chars and ballooned the right pane. Fixed width 22 cured it.
+- Left list is now title + right-aligned age columns.
+- Hover tooltips on both lists show the full clipped row text.
+- Clicking a row opens the single-session view in the center, verified
+  with real data: Resume visible, wrapped metadata, wrapped action
+  buttons (`session_actions` reflows), and real transcript text.
+- Engine fix (shared, not a fork): openwork preview text lives in
+  `part.data`, but `_preview_openwork` only read `message`. It now
+  joins part text per message (guarded; DBs without `part` behave as
+  before). Verified: 6/6 turns with real text.
+
+Tests after: test_desk 21/21, test_sessions_page 68/68,
+test_store_fixes 11/11, test_record 10/10, test_formats ok.
+Rebuilt and deployed `CM Sessions.exe` (13,787,656 bytes). Older
+desktop copies untouched. Live exe run confirmed up; close it from
+the window before the next rebuild.
+
+## 2026-11-08 — item 5: handoff (picker, Hand off, child record)
+
+- Target picker in the session chain row (`Hand off [target ▾]`),
+  bound to `app_var`. Lists `engine.installed_launchers()` only —
+  uninstalled harnesses are hidden, not shown as dead buttons. The
+  source harness stays listed so same-harness Resume can still plan.
+  On this machine 11 binaries resolve (grok, claude, codex, cursor,
+  gemini, agy, antigravity-ide, hermes, pi, copilot, cline).
+- `Hand off` now executes (`desk._on_handoff`): same harness shows
+  the resume plan with guidance; a different installed target goes
+  through `plan_foreign_launch` → export + bare launch. OPENWORK_FOCUS
+  / NEED_LOAD plans display without spawning. Nothing launches by itself.
+- `_start_handoff` appends `var/handoffs.jsonl` via
+  `engine.record_handoff` (parent id/harness, target, binary, pid,
+  carried export path, cwd). "Carry the indexed transcript" = the
+  export `.md` path is written into the record and shown. "Record the
+  new session as a child" = the pending-child line (child id unknown
+  at launch). The source session is never closed.
+- Hidden OptionMenu (`_set_app_choices`) filtered the same way.
+
+Tests: 21/21, 68/68, 12/12 (new handoff-record case), 10/10, formats
+ok. Render-verified with real data (picker renders, chain row fits).
+Deployed as `CM Sessions2.exe` (13,791,423 bytes) per Keith — numbered
+names from here on so a running exe never blocks the copy.
+`CM Sessions.exe` left untouched.
 
 ## TidyUP2 leftovers
 

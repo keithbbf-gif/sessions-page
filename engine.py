@@ -3280,9 +3280,35 @@ def _jsonl_head_turns(path: Path, harness: str, n_want: int) -> tuple[list[dict]
     return parsed, len(parsed), False
 
 
-def _message_turns(rows: list[tuple]) -> list[dict]:
+def _part_texts(rows: list[tuple]) -> dict:
+    """Map message_id to the joined text of its part rows. Skips empty parts."""
+    texts: dict[str, list[str]] = {}
+    for row in rows:
+        if len(row) != 2:
+            continue
+        mid, data = row
+        try:
+            obj = json.loads(data) if isinstance(data, str) else json.loads(data.decode("utf-8"))
+        except (ValueError, AttributeError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        text = _text_of(obj.get("text") if obj.get("text") is not None else obj.get("content"))
+        if not str(text or "").strip():
+            text = _text_of(obj)
+        if not str(text or "").strip():
+            continue
+        texts.setdefault(str(mid), []).append(str(text))
+    return {mid: "\n".join(items) for mid, items in texts.items()}
+
+
+def _message_turns(rows: list[tuple], parts: dict | None = None) -> list[dict]:
     turns = []
-    for (data,) in rows:
+    for row in rows:
+        if len(row) == 2 and parts is not None:
+            mid, data = row
+        else:
+            mid, data = None, row[-1]
         try:
             obj = json.loads(data) if isinstance(data, str) else json.loads(data.decode("utf-8"))
         except (ValueError, AttributeError):
@@ -3290,10 +3316,15 @@ def _message_turns(rows: list[tuple]) -> list[dict]:
         role = str(obj.get("role") or obj.get("type") or "meta")
         if role not in ("user", "assistant", "system"):
             role = "meta"
+        text = ""
+        if mid is not None and parts is not None:
+            text = parts.get(str(mid)) or ""
+        if not str(text or "").strip():
+            text = _text_of(obj.get("content") if "content" in obj else obj.get("text"))
         turns.append({
             "seq": len(turns) + 1,
             "role": role,
-            "text": _text_of(obj.get("content") if "content" in obj else obj.get("text")),
+            "text": text,
             "model": obj.get("model"),
         })
     return turns
@@ -3326,13 +3357,20 @@ def _preview_openwork(hit: dict, n_want: int, chars: int) -> dict:
         ).fetchone()
         n_turns = int(total[0]) if total else 0
         msgs = list(con.execute(
-            "SELECT data FROM message WHERE session_id=? ORDER BY time_created, id LIMIT ?",
+            "SELECT id, data FROM message WHERE session_id=? ORDER BY time_created, id LIMIT ?",
             (hit["vendor_id"], int(max(0, n_want))),
         ))
+        try:
+            prows = list(con.execute(
+                "SELECT message_id, data FROM part WHERE session_id=? ORDER BY time_created, id LIMIT ?",
+                (hit["vendor_id"], int(max(0, n_want)) * 8),
+            ))
+        except sqlite3.Error:
+            prows = []
         con.close()
     except sqlite3.Error as exc:
         raise PageError("SCHEMA_UNKNOWN", str(exc))
-    shown = _clip_turns(_message_turns(msgs), n_want, chars)
+    shown = _clip_turns(_message_turns(msgs, _part_texts(prows)), n_want, chars)
     return _preview_result(hit, "OK", n_turns, shown)
 
 
@@ -3491,6 +3529,34 @@ def build_index(out_path: Path | None = None, homes: dict | None = None,
         "n": found["n"], "n_legal": found["legal_omitted"],
         "out": str(out_path), "out_sha": sha256_bytes(payload), "len": len(payload),
     }, legal_omitted=found["legal_omitted"])
+
+
+HANDOFF_SCHEMA = "cmsessions-handoff/1"
+
+
+def record_handoff(entry: dict | None = None, root: Path | None = None) -> dict:
+    """Append one handoff line. The launched child id is not known yet, so the
+    parent id, target, pid, and carried transcript path are what get recorded.
+    The source session is never touched. Raises only when unwritable.
+    """
+    entry = dict(entry or {})
+    record = {
+        "schema": HANDOFF_SCHEMA,
+        "ts": str(entry.get("ts") or time.strftime("%Y-%m-%dT%H:%M:%S")),
+        "parent": str(entry.get("parent") or ""),
+        "parent_harness": str(entry.get("parent_harness") or ""),
+        "target": str(entry.get("target") or ""),
+        "binary": str(entry.get("binary") or ""),
+        "pid": entry.get("pid"),
+        "export": str(entry.get("export") or ""),
+        "cwd": str(entry.get("cwd") or ""),
+    }
+    out_dir = Path(root) if root is not None else var_dir()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "handoffs.jsonl"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+    return {"path": str(path), "record": record}
 
 
 def read_saved_index(path: Path | None = None) -> dict:
