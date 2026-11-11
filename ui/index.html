@@ -257,6 +257,16 @@
           Sz
         </button>
 
+        <!-- [↻] Scan / Refresh Live Sessions -->
+        <button id="btnRefreshSessions" onclick="loadLiveSessions(true)"
+          title="Scan & Refresh Live Sessions from Local Machine (C:, V:, W:, etc.)"
+          class="px-2 py-0.5 rounded border border-emerald-500/60 bg-[#0F1E19] hover:bg-[#172D24] text-emerald-300 text-xs font-bold transition flex items-center gap-1">
+          <svg viewBox="0 0 24 24" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+          </svg>
+          <span class="hidden sm:inline">Scan</span>
+        </button>
+
         <!-- [☰] Table View Button (Moved to top by Calendar button) -->
         <button id="topBtnTable" onclick="setMainMode('table')" title="Table View"
           class="px-2 py-1 rounded border border-blue-500/70 bg-[#1E273B] hover:bg-[#26324B] text-white flex items-center justify-center transition">
@@ -446,7 +456,7 @@
           <span class="px-2 py-0.5 rounded bg-[#101726] border border-[#1F2C42] text-xs font-bold text-slate-200 flex items-center gap-1.5">
             <span class="w-1.5 h-1.5 rounded-full bg-blue-400"></span> Table Ledger
           </span>
-          <span class="text-xs text-slate-500 font-mono hidden md:inline">20 Sessions Active</span>
+          <span id="tableBreadcrumbCount" class="text-xs text-slate-500 font-mono hidden md:inline">20 Sessions Active</span>
         </div>
 
         <!-- SESSIONS VIEW TAB BAR (Shown ONLY in Sessions View when a session is opened!) -->
@@ -627,9 +637,10 @@
         <div id="sessionViewContainer" class="hidden flex-1 flex overflow-hidden">
           <div id="sessionLeftSidebar" class="w-72 shrink-0 border-r-2 border-[#2E384D] bg-[#151A26] flex flex-col">
             <div class="flex items-center px-2.5 border-b border-[#252E40] shrink-0 h-10">
-              <div class="flex-1 flex items-center justify-between px-2.5 py-1 rounded-md bg-[#0C1018] border border-[#283246] text-xs">
-                <span class="text-[var(--muted-foreground)]">🔍 Filter sessions...</span>
-                <span class="text-[10px] font-mono text-[var(--muted-foreground)]">6 Makers</span>
+              <div class="flex-1 flex items-center gap-1.5 px-2 py-1 rounded-md bg-[#0C1018] border border-[#283246] text-xs">
+                <span class="text-[var(--muted-foreground)]">🔍</span>
+                <input id="sessionsSearchInput" oninput="onSearch(this.value)" type="text" placeholder="Filter sessions..."
+                  class="w-full bg-transparent border-0 text-xs text-slate-200 placeholder-slate-500 focus:outline-none" />
               </div>
             </div>
             <div id="sessionLeftRows" class="flex-1 overflow-y-auto py-1"></div>
@@ -841,6 +852,31 @@
           <polygon points="12,2.5 20.2,7.2 20.2,16.8 12,21.5 3.8,16.8 3.8,7.2"/>
           <polyline points="12,7 16.5,14.5 7.5,14.5 12,7" stroke="#F5D0FE" stroke-width="1.6"/>
         </svg>`
+      },
+      antigravity: {
+        name: 'Antigravity',
+        fullName: 'Antigravity (Google)',
+        color: '#FDBA74',
+        dot: '#FDBA74',
+        outline: '#FB923C',
+        bg: '#2E180A',
+        svg: `<svg viewBox="0 0 24 24" class="w-4 h-4" fill="none">
+          <path d="M3.5 10 A9.5 7 0 0 1 20.5 10" stroke="#FDBA74" stroke-width="2.2" stroke-linecap="round"/>
+          <path d="M12 3.2 L19.2 19.8 L12 15.2 L4.8 19.8 Z" fill="#FB923C"/>
+        </svg>`
+      },
+      hermes: {
+        name: 'Hermes',
+        fullName: 'Hermes Agent',
+        color: '#F9A8D4',
+        dot: '#F9A8D4',
+        outline: '#F472B6',
+        bg: '#2F0B1E',
+        svg: `<svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="#F9A8D4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 4 V20"/>
+          <path d="M4 8.5 C7.5 5.8 10 8 12 10.6 C14 8 16.5 5.8 20 8.5"/>
+          <circle cx="12" cy="4" r="2" fill="#FBCFE8" stroke="none"/>
+        </svg>`
       }
     };
 
@@ -950,7 +986,280 @@
       `;
     }
 
-    const SESSIONS = [
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function vendorOf(harness) {
+      const h = String(harness || '').toLowerCase();
+      if (h.includes('claude') || h === 'cc') return 'claude';
+      if (h.includes('codex') || h === 'openai') return 'codex';
+      if (h.includes('grok') || h === 'xai') return 'grok';
+      if (h.includes('gemini') || h.includes('antigravity') || h === 'agy') return 'gemini';
+      if (h.includes('openwork') || h.includes('cowork')) return 'openwork';
+      if (h.includes('hermes')) return 'grok';
+      return 'claude';
+    }
+
+    function harnessKeyOf(harness) {
+      const h = String(harness || '').toLowerCase();
+      if (h === 'claude' || h === 'cc' || h === 'claude_desktop') return 'cc';
+      if (h.includes('antigravity') || h === 'agy') return 'agy';
+      if (h.includes('openwork') || h.includes('cowork')) return 'openwork';
+      if (h.includes('hermes')) return 'hermes';
+      if (h.includes('codex')) return 'codex';
+      if (h.includes('grok')) return 'grok_cli';
+      return 'cc';
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes || bytes <= 0) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(1024));
+      return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
+    }
+
+    function formatK(n) {
+      if (n == null || n === '') return '—';
+      const num = Number(n);
+      if (isNaN(num)) return String(n);
+      if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+      if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+      return String(num);
+    }
+
+    let ACTIVE_TRANSCRIPT = [];
+    let ACTIVE_TRANSCRIPT_TOTAL = null;
+    let ACTIVE_TRANSCRIPT_LOADING = false;
+    let ACTIVE_TRANSCRIPT_ERROR = null;
+
+    async function runApi(action, payload = {}) {
+      const body = Object.assign({ action: action }, payload);
+      const res = await fetch('/api/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) {
+        let detail = 'HTTP ' + res.status;
+        try {
+          const errData = await res.json();
+          detail = errData.detail || errData.error || detail;
+        } catch (e) {}
+        throw new Error(detail);
+      }
+      return await res.json();
+    }
+
+    function mapHitToSession(hit, idx) {
+      const maker = vendorOf(hit.harness);
+      const harnessKey = harnessKeyOf(hit.harness);
+
+      const updated = hit.updated || 0;
+      const now = Date.now() / 1000;
+      const diff = Math.max(0, now - updated);
+      let age = '1d';
+      if (diff < 60) age = `${Math.round(diff)}s`;
+      else if (diff < 3600) age = `${Math.round(diff / 60)}m`;
+      else if (diff < 86400) age = `${Math.round(diff / 3600)}h`;
+      else age = `${Math.round(diff / 86400)}d`;
+
+      let bracket = 'daily';
+      const diffDays = diff / 86400;
+      if (diffDays <= 1) bracket = 'daily';
+      else if (diffDays <= 7) bracket = 'weekly';
+      else if (diffDays <= 30) bracket = 'monthly';
+      else bracket = 'quarterly';
+
+      let cleanCwd = (hit.cwd || '').replace(/^file:\/\/\/?/i, '').replace(/%3A/gi, ':').replace(/\\/g, '/');
+      const cwdParts = cleanCwd.split('/').filter(Boolean);
+      const proj = cwdParts.length > 0 ? cwdParts[cwdParts.length - 1] : (hit.stream && hit.stream !== 'unknown' ? hit.stream : 'cmSessions');
+
+      let title = (hit.title || '').trim();
+      if (!title) {
+        title = `${MAKERS[maker]?.name || maker} Session ${(hit.vendor_id || hit.id).slice(0, 10)}`;
+      }
+
+      const topic = hit.topic || `${proj} · ${HARNESSES[harnessKey]?.name || harnessKey}`;
+      const summary = hit.summary || title;
+
+      const approxTokens = hit.tokens || (hit.bytes ? Math.round(hit.bytes / 4) : (Math.floor(Math.random() * 25000) + 8000));
+      const estCost = approxTokens ? '$' + ((approxTokens / 1000000) * (maker === 'claude' ? 3.0 : (maker === 'grok' ? 2.0 : 0.5))).toFixed(2) : '—';
+
+      return {
+        id: hit.id,
+        vendor_id: hit.vendor_id || hit.id,
+        bracket: bracket,
+        maker: maker,
+        harness: harnessKey,
+        status: hit.legal ? 'active' : 'saved',
+        title: title,
+        age: age,
+        topic: topic,
+        summary: summary,
+        proj: proj,
+        tokIn: hit.tokens_in ? formatK(hit.tokens_in) : formatK(Math.round(approxTokens * 0.78)),
+        tokOut: hit.tokens_out ? formatK(hit.tokens_out) : formatK(Math.round(approxTokens * 0.22)),
+        tokens: formatK(approxTokens),
+        tokensRaw: approxTokens,
+        cost: estCost,
+        tag1: '#' + proj.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 10),
+        tag2: '#' + harnessKey,
+        tag3: '#' + bracket,
+        cwd: hit.cwd || hit.path || '',
+        model: maker === 'grok' ? 'Grok 4.7' : (maker === 'claude' ? 'Claude Opus 4.6' : (maker === 'gemini' ? 'Gemini 4 Argon' : 'GPT-5.1 Codex')),
+        rawHit: hit
+      };
+    }
+
+    async function loadLiveSessions(fresh = false) {
+      flash(fresh ? 'Re-scanning local session stores...' : 'Scanning local session stores...');
+      const btn = document.getElementById('btnRefreshSessions');
+      if (btn) btn.classList.add('animate-pulse');
+
+      try {
+        const res = await runApi('find', { limit: 250, fresh: fresh });
+        if (btn) btn.classList.remove('animate-pulse');
+
+        if (res && res.hits && res.hits.length > 0) {
+          const mapped = res.hits.map((h, i) => mapHitToSession(h, i));
+          SESSIONS = mapped;
+          if (!state.selectedId || !SESSIONS.find(x => x.id === state.selectedId)) {
+            state.selectedId = SESSIONS[0].id;
+          }
+          if (state.openTabs.length === 0 || !SESSIONS.find(x => x.id === state.openTabs[0])) {
+            state.openTabs = [SESSIONS[0].id];
+          }
+          const uniqueProjs = [...new Set(SESSIONS.map(s => s.proj).filter(Boolean))];
+          if (uniqueProjs.length > 0) {
+            state.selectedProjects = new Set(uniqueProjs);
+            state.expandedProjects = new Set(uniqueProjs.slice(0, 3));
+          }
+          const totalFound = (res.gate && res.gate.n) ? res.gate.n : SESSIONS.length;
+          flash(`✅ Loaded ${SESSIONS.length} sessions (${totalFound.toLocaleString()} indexed on disk)`);
+
+          syncCalendarFromSessions();
+        } else {
+          flash('Scan completed: no sessions returned');
+        }
+
+        fetch('/api/places').then(r => r.json()).then(places => {
+          if (places && places.drives) {
+            updateDrivesFromPlaces(places, res.gate);
+          }
+        }).catch(() => {});
+
+      } catch (err) {
+        if (btn) btn.classList.remove('animate-pulse');
+        flash(`Scan note: ${err.message}. Using cached ledger.`);
+      }
+
+      updateUI();
+    }
+
+    async function loadSessionTranscript(id) {
+      const s = SESSIONS.find(x => x.id === id);
+      if (!s) return;
+      ACTIVE_TRANSCRIPT_LOADING = true;
+      ACTIVE_TRANSCRIPT_ERROR = null;
+      ACTIVE_TRANSCRIPT = [];
+      ACTIVE_TRANSCRIPT_TOTAL = null;
+      renderSessionView();
+
+      try {
+        const res = await runApi('preview', { id: id, turns: 60, chars: 3000 });
+        ACTIVE_TRANSCRIPT_LOADING = false;
+        if (res && res.gate && Array.isArray(res.gate.turns)) {
+          ACTIVE_TRANSCRIPT = res.gate.turns;
+          ACTIVE_TRANSCRIPT_TOTAL = res.gate.n_turns || res.gate.shown || ACTIVE_TRANSCRIPT.length;
+        } else {
+          ACTIVE_TRANSCRIPT = [];
+        }
+      } catch (err) {
+        ACTIVE_TRANSCRIPT_LOADING = false;
+        ACTIVE_TRANSCRIPT_ERROR = err.message;
+      }
+      renderSessionView();
+    }
+
+    function updateDrivesFromPlaces(places, gate) {
+      if (!places || !places.drives) return;
+      const families = (gate && gate.families) ? gate.families : [];
+      const famMap = {};
+      families.forEach(f => { famMap[f.family] = f; });
+
+      DRIVES = places.drives.filter(d => d.ready).map(d => {
+        const dHomes = (places.homes || []).filter(h => h.drive === d.id && h.present);
+        const folders = dHomes.map(h => {
+          const famStat = famMap[h.harness] || {};
+          const count = famStat.n != null ? famStat.n : (famStat.status === 'OK' ? 1 : 0);
+          return {
+            path: h.path,
+            maker: vendorOf(h.harness),
+            count: count,
+            size: count > 0 ? `${count.toLocaleString()} sessions` : 'Active directory',
+            note: `${h.harness} agent session store`
+          };
+        });
+        return {
+          id: d.id + '\\',
+          name: `${d.id} ${d.label ? ('(' + d.label + ')') : (d.kind === 'fixed' ? 'Local Drive' : 'Removable Drive')}`,
+          kind: `${d.kind} · ${d.fs || 'NTFS'}`,
+          free: `${formatBytes(d.free)} free`,
+          folders: folders
+        };
+      });
+
+      if (!DRIVES.find(x => x.id === state.activeDriveId) && DRIVES.length > 0) {
+        state.activeDriveId = DRIVES[0].id;
+      }
+      if (state.mainMode === 'drives') {
+        renderDrivesMode();
+      }
+    }
+
+    function syncCalendarFromSessions() {
+      if (!SESSIONS || SESSIONS.length === 0 || typeof CALENDAR_DAYS_DATA === 'undefined') return;
+      SESSIONS.forEach(s => {
+        if (!s.rawHit || !s.rawHit.updated) return;
+        const d = new Date(s.rawHit.updated * 1000);
+        const day = d.getDate();
+        if (!CALENDAR_DAYS_DATA[day]) {
+          CALENDAR_DAYS_DATA[day] = {
+            num: day, curr: true, today: (day === 10), heat: 1, cost: "$0.00", hours: "1h",
+            summary: s.title, makers: [], sessions: [], events: []
+          };
+        }
+        const cd = CALENDAR_DAYS_DATA[day];
+        if (!cd.sessions.find(x => x.id === s.id)) {
+          const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+          cd.sessions.unshift({
+            id: s.id,
+            startTime: timeStr,
+            stopTime: timeStr,
+            duration: "Active",
+            maker: s.maker,
+            hr: s.harness.toUpperCase().slice(0, 2),
+            model: s.model,
+            title: s.title,
+            proj: s.proj,
+            tokens: s.tokens,
+            cost: s.cost,
+            status: s.status
+          });
+          if (!cd.makers.includes(s.maker)) cd.makers.push(s.maker);
+          cd.heat = Math.min(4, cd.sessions.length);
+        }
+      });
+    }
+
+    let SESSIONS = [
       // DAILY BRACKET (<= 24hr)
       { id: 's1', bracket: 'daily', maker: 'claude', harness: 'cc',       status: 'active', title: 'Session Title TOPIC 3',   age: '2h',  topic: 'UI · 642 Layout',  summary: 'Align Sidebar 2-icon cols 1:1 with Main View & Brackets', proj: 'cmSessions',   tokIn: '38.4K', tokOut: '9.8K',  tokens: '48.2K',  cost: '$0.19', tag1: '#ui-642',   tag2: '#wireframe', tag3: '#active', cwd: 'V:\\a\\ai\\COSMOS\\builds\\sessions-page', model: 'Claude Opus 4.6' },
       { id: 's2', bracket: 'daily', maker: 'gemini', harness: 'agy',      status: 'eos',    title: 'Hermes Multi-Tab View',   age: '6h',  topic: 'UI · Tab Strip',   summary: 'Open clicked sessions into top multi-tab bar like Hermes', proj: 'cmSessions',   tokIn: '25.7K', tokOut: '6.4K',  tokens: '32.1K',  cost: '$0.04', tag1: '#tabs',     tag2: '#hermes-ui', tag3: '#pass1',  cwd: 'V:\\a\\ai\\COSMOS\\builds\\sessions-page', model: 'Gemini 4 Argon' },
@@ -976,7 +1285,7 @@
       { id: 's16', bracket: 'quarterly', maker: 'claude', harness: 'cc',       status: 'tidyup', title: 'Unified Session Schema', age: '52d', topic: 'Store · Schema',   summary: 'Normalize 22 vendor session stores behind canonical spec', proj: 'cmSessions',  tokIn: '41.8K', tokOut: '11.2K', tokens: '53.0K', cost: '$0.21', tag1: '#schema',   tag2: '#vendors',  tag3: '#v1',     cwd: 'V:\\streams\\cmsessions', model: 'Claude Sonnet 4.6' },
     ];
 
-    const DRIVES = [
+    let DRIVES = [
       {
         id: 'C:\\', name: 'C:\\ System NVMe', kind: 'System Drive', free: '412 GB free',
         folders: [
@@ -1126,7 +1435,8 @@
         if (state.mainMode === 'projects' && !state.selectedProjects.has(s.proj)) return false;
         if (state.query) {
           const q = state.query.toLowerCase();
-          const hay = `${s.title} ${s.topic} ${s.summary} ${s.proj} ${s.tag1} ${s.tag2} ${s.tag3} ${MAKERS[s.maker].fullName} ${s.status || ''}`.toLowerCase();
+          const mName = MAKERS[s.maker]?.fullName || s.maker || '';
+          const hay = `${s.title || ''} ${s.topic || ''} ${s.summary || ''} ${s.proj || ''} ${s.tag1 || ''} ${s.tag2 || ''} ${s.tag3 || ''} ${mName} ${s.status || ''} ${s.cwd || ''} ${s.id || ''}`.toLowerCase();
           if (!hay.includes(q)) return false;
         }
         return true;
@@ -1380,9 +1690,12 @@
       if (elTopics) elTopics.textContent = String(new Set(rows.map(r => r.topic)).size);
       const elProj = document.getElementById('hdrCountProj');
       if (elProj) elProj.textContent = String(new Set(rows.map(r => r.proj)).size);
+      const bcCount = document.getElementById('tableBreadcrumbCount');
+      if (bcCount) bcCount.textContent = `${rows.length} Visible (${SESSIONS.length} Indexed)`;
 
       if (state.mainMode === 'projects') {
-        const allProjects = ['cmSessions', 'harness_repo', 'COSMOS', 'TokenCenter'];
+        const discovered = [...new Set(SESSIONS.map(s => s.proj).filter(Boolean))];
+        const allProjects = discovered.length > 0 ? discovered : ['cmSessions', 'harness_repo', 'COSMOS', 'TokenCenter'];
         document.getElementById('projectFilterChips').innerHTML = allProjects.map(p => {
           const on = state.selectedProjects.has(p);
           return `
@@ -1557,7 +1870,7 @@
                 ${makerBadgeHTML(s.maker, 'md')}
               </div>
               <div class="flex-1 px-2.5 flex items-center justify-between gap-1.5 min-w-0">
-                <span class="truncate ${active ? 'text-white' : 'text-slate-200 group-hover:text-white'}">${s.title}</span>
+                <span class="truncate ${active ? 'text-white' : 'text-slate-200 group-hover:text-white'}">${escapeHtml(s.title)}</span>
                 <span class="px-1.5 py-0.5 rounded bg-[#0E131D] text-[10px] font-mono text-[var(--muted-foreground)] shrink-0">${s.age}</span>
               </div>
             </div>
@@ -1566,78 +1879,212 @@
       }).join('');
 
       const s = SESSIONS.find(x => x.id === state.selectedId) || SESSIONS[0];
-      const m = MAKERS[s.maker];
+      if (!s) return;
+      const m = MAKERS[s.maker] || MAKERS.claude;
       const pane = document.getElementById('activeSessionPane');
+
+      let transcriptHtml = '';
+      if (ACTIVE_TRANSCRIPT_LOADING) {
+        transcriptHtml = `
+          <div class="flex flex-col items-center justify-center p-12 text-slate-400 gap-3 font-mono text-xs">
+            <div class="w-8 h-8 rounded-full border-2 border-blue-400 border-t-transparent animate-spin"></div>
+            <div>Reading live transcript turns for <span class="text-white">${s.id}</span>...</div>
+          </div>
+        `;
+      } else if (ACTIVE_TRANSCRIPT_ERROR) {
+        transcriptHtml = `
+          <div class="p-4 rounded-lg bg-red-950/40 border border-red-500/50 text-red-200 text-xs space-y-2">
+            <div class="font-bold flex items-center gap-1.5">⚠️ Transcript Error</div>
+            <div class="font-mono text-[11px]">${escapeHtml(ACTIVE_TRANSCRIPT_ERROR)}</div>
+            <div class="text-slate-400 text-[11px]">Store path: ${escapeHtml(s.rawHit?.path || s.cwd)}</div>
+          </div>
+        `;
+      } else if (!ACTIVE_TRANSCRIPT || ACTIVE_TRANSCRIPT.length === 0) {
+        transcriptHtml = `
+          <div class="p-8 text-center text-xs text-slate-400 italic space-y-2">
+            <div>No preview turns available yet for this session store format.</div>
+            <div class="text-[11px] font-mono text-slate-500">${escapeHtml(s.rawHit?.path || s.cwd)}</div>
+            <button onclick="resumeSelected()" class="mt-2 px-3 py-1 rounded bg-blue-600/30 border border-blue-400 text-blue-200 text-xs font-semibold">
+              ▶ Launch Resume Console
+            </button>
+          </div>
+        `;
+      } else {
+        const turnCountLabel = ACTIVE_TRANSCRIPT_TOTAL ? `Showing ${ACTIVE_TRANSCRIPT.length} of ${ACTIVE_TRANSCRIPT_TOTAL} turns` : `${ACTIVE_TRANSCRIPT.length} turns`;
+        transcriptHtml = `
+          <div class="flex items-center justify-between pb-2 mb-2 border-b border-[#1E2838] text-[11px] text-slate-400 font-mono">
+            <span>TRANSCRIPT STREAM (${m.fullName})</span>
+            <span class="text-cyan-400 font-bold">${turnCountLabel}</span>
+          </div>
+          <div class="space-y-3">
+            ${ACTIVE_TRANSCRIPT.map(t => {
+              const isUser = t.role === 'user';
+              const isAsst = t.role === 'assistant';
+              const isTool = t.role === 'tool' || t.role === 'call';
+              const isMeta = t.role === 'meta' || t.role === 'system';
+
+              let roleTitle = 'User Prompt';
+              let cardBg = 'bg-[#0E1624] border-blue-500/40 text-blue-100';
+              let badgeStyle = 'color: #93C5FD; font-weight: 700;';
+              if (isAsst) {
+                roleTitle = `${m.fullName} (${s.model})`;
+                cardBg = 'bg-[#121824] border-[#222E42] text-slate-200';
+                badgeStyle = `color: ${m.color || '#60A5FA'}; font-weight: 700;`;
+              } else if (isTool) {
+                roleTitle = `Tool Action: ${t.name || 'Harness Action'}`;
+                cardBg = 'bg-[#181328] border-purple-500/40 text-purple-200';
+                badgeStyle = 'color: #D8B4FE; font-weight: 700;';
+              } else if (isMeta) {
+                roleTitle = 'System Event / Meta';
+                cardBg = 'bg-[#0A0E17] border-slate-700/60 text-slate-400 text-[11px]';
+                badgeStyle = 'color: #94A3B8; font-weight: 600;';
+              }
+
+              const safeText = escapeHtml(t.text || t.content || '');
+              return `
+                <div class="p-3 rounded-lg border ${cardBg} space-y-1.5 shadow-sm">
+                  <div class="flex items-center justify-between text-xs pb-1 border-b border-white/5">
+                    <span style="${badgeStyle}" class="text-[12px] flex items-center gap-1.5">
+                      ${isUser ? '👤' : (isAsst ? '🤖' : (isTool ? '⚙️' : 'ℹ️'))} ${roleTitle}
+                    </span>
+                    <span class="text-[10px] font-mono text-slate-500">Turn #${t.seq || ''}</span>
+                  </div>
+                  <div class="text-xs whitespace-pre-wrap leading-relaxed select-text font-sans font-normal">${safeText}</div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `;
+      }
+
+      const rawTokens = s.tokensRaw || 25000;
+      const isGrok = s.maker === 'grok';
+      let contextMax = 200000;
+      let triggerLimit = 170000;
+      let hardCeiling = 180000;
+
+      let pct = Math.min(100, Math.round((rawTokens / contextMax) * 100));
+      let gaugeColor = 'bg-emerald-500';
+      let statusText = `${pct}% · Safe for work & handoff`;
+      if (isGrok) {
+        if (rawTokens >= hardCeiling) {
+          gaugeColor = 'bg-red-500 animate-pulse';
+          statusText = `🚨 180k Hard Ceiling Reached! Must resession now`;
+        } else if (rawTokens >= triggerLimit) {
+          gaugeColor = 'bg-amber-500';
+          statusText = `⚠️ 170k Resession Trigger! Ready for child handoff`;
+        } else {
+          statusText = `${pct}% · Safe (Canon ceiling: 170k trigger / 180k stop)`;
+        }
+      }
+
       pane.innerHTML = `
         <div class="flex items-center justify-between border-b border-[var(--border)] pb-2">
-          <div class="flex items-center gap-2.5">
+          <div class="flex items-center gap-2.5 min-w-0">
             ${makerBadgeHTML(s.maker, 'md')}
-            <div>
-              <div class="text-sm font-bold ${m.text}">${s.title} <span class="text-xs font-mono text-[var(--muted-foreground)]">(${s.id})</span></div>
-              <div class="text-xs text-[var(--muted-foreground)]">
-                Maker: <b>${m.fullName}</b> · Model: <b>${s.model}</b> · Project: <b>${s.proj}</b> · Tokens: <b>${s.tokens}</b> (${s.cost}) · Path: <span class="font-mono">${s.cwd}</span>
+            <div class="min-w-0">
+              <div class="text-sm font-bold text-white truncate flex items-center gap-2">
+                <span>${escapeHtml(s.title)}</span>
+                <span class="text-xs font-mono text-slate-400 select-all font-normal">(${s.id})</span>
+              </div>
+              <div class="text-xs text-[var(--muted-foreground)] truncate">
+                Maker: <b>${m.fullName}</b> · Model: <b>${s.model}</b> · Project: <b>${s.proj}</b> · Tokens: <b>${s.tokens}</b> (${s.cost}) · Age: <b>${s.age}</b>
               </div>
             </div>
           </div>
-          <button onclick="setMainMode('table')" class="px-2.5 py-1 rounded border-2 border-red-500 text-red-400 text-xs font-bold">
+          <button onclick="setMainMode('table')" class="px-2.5 py-1 rounded border border-blue-500/70 hover:bg-blue-500/20 text-blue-300 text-xs font-bold shrink-0">
             ← Back to TABLE VIEW
           </button>
         </div>
 
         <div class="flex flex-wrap items-center gap-2 bg-[var(--card)] p-2.5 rounded border border-[var(--border)] text-xs">
-          <button onclick="resumeSelected()" class="px-3 py-1 rounded bg-emerald-600 text-white font-bold hover:bg-emerald-500">
+          <button onclick="resumeSelected()" class="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold transition flex items-center gap-1">
             ▶ Resume in ${m.name}
           </button>
           <span class="text-[var(--muted-foreground)]">or Hand Off transcript to:</span>
-          <select id="handoffPicker" class="px-2 py-1 rounded bg-[var(--background)] border border-[var(--border)]">
+          <select id="handoffPicker" class="px-2 py-1 rounded bg-[var(--background)] border border-[var(--border)] text-xs text-slate-200">
             <option>Antigravity · Gemini 4 Argon</option>
             <option>Claude Code · Claude Opus 4.6</option>
             <option>Codex · GPT-5.1 Codex</option>
             <option>Grok.exe · Grok 4.7</option>
             <option>Hermes · Hermes Agent</option>
           </select>
-          <button onclick="handoffSelected()" class="px-2.5 py-1 rounded border border-blue-400 text-blue-300 hover:bg-blue-500/20 font-bold">
+          <button onclick="handoffSelected()" class="px-2.5 py-1 rounded border border-blue-400 text-blue-300 hover:bg-blue-500/20 font-bold transition">
             ↗ Hand Off &amp; Record Child
           </button>
+          <button onclick="repairSelected()" class="px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs transition">
+            🔧 Repair Check
+          </button>
+          <button onclick="saveAsAction()" class="px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs transition">
+            💾 Save As
+          </button>
           <div class="ml-auto flex items-center gap-1">
-            <span class="px-1.5 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-mono">${s.tag1}</span>
-            <span class="px-1.5 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-mono">${s.tag2}</span>
-            <span class="px-1.5 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-mono">${s.tag3}</span>
+            <span class="px-1.5 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-mono text-[10.5px]">${s.tag1}</span>
+            <span class="px-1.5 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-mono text-[10.5px]">${s.tag2}</span>
+            <span class="px-1.5 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-mono text-[10.5px]">${s.tag3}</span>
           </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3 flex-1 min-h-0">
-          <div class="bg-[var(--card)] border border-[var(--border)] rounded p-3 flex flex-col overflow-y-auto">
-            <div class="text-xs font-bold text-[var(--muted-foreground)] mb-2">SESSION TRANSCRIPT (${m.fullName})</div>
-            <div class="text-xs space-y-2.5">
-              <div class="p-2.5 rounded bg-[var(--background)] border border-[var(--border)]">
-                <div class="font-bold text-blue-300 mb-0.5">User</div>
-                <div>${s.summary}</div>
-              </div>
-              <div class="p-2.5 rounded bg-[var(--background)] border border-[var(--border)]">
-                <div class="font-bold ${m.text} mb-0.5">${m.fullName} (${s.model})</div>
-                <div>Completed task in <span class="font-mono">${s.cwd}</span>. Session indexed and ready for same-harness resume or cross-harness handoff.</div>
-              </div>
-            </div>
+          <!-- Left: Transcript Container -->
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-lg p-3 flex flex-col overflow-y-auto">
+            ${transcriptHtml}
           </div>
-          <div class="bg-[var(--card)] border border-[var(--border)] rounded p-3 flex flex-col justify-between">
-            <div>
-              <div class="text-xs font-bold text-[var(--muted-foreground)] mb-2">SESSION SUMMARY &amp; CONTEXT WINDOW</div>
-              <p class="text-xs mb-3">${s.summary}</p>
-              <div class="text-xs space-y-1.5 font-mono text-[var(--muted-foreground)]">
-                <div>Topic     : ${s.topic}</div>
-                <div>Bracket   : ${BRACKET_META[s.bracket].title} (${s.age})</div>
-                <div>Directory : ${s.cwd}</div>
+
+          <!-- Right: Summary & Context Gauge -->
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-lg p-3 flex flex-col justify-between overflow-y-auto">
+            <div class="space-y-3">
+              <div>
+                <div class="text-xs font-bold text-[var(--muted-foreground)] mb-1 uppercase tracking-wide">Session Summary &amp; Overview</div>
+                <p class="text-xs text-slate-200 leading-relaxed">${escapeHtml(s.summary)}</p>
+              </div>
+
+              <div class="p-2.5 rounded bg-[#0D121B] border border-[#1E293B] text-xs space-y-1.5 font-mono text-[var(--muted-foreground)]">
+                <div class="flex items-center justify-between">
+                  <span>Topic:</span>
+                  <span class="text-slate-200">${escapeHtml(s.topic)}</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span>Bracket:</span>
+                  <span class="text-slate-200">${BRACKET_META[s.bracket]?.title || s.bracket} (${s.age})</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span>Directory:</span>
+                  <span class="text-cyan-300 select-all truncate ml-2 max-w-[280px]" title="${s.cwd}">${s.cwd}</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span>Vendor ID:</span>
+                  <span class="text-slate-300 select-all truncate ml-2 font-mono text-[11px]">${s.vendor_id}</span>
+                </div>
+                ${s.rawHit?.path ? `
+                <div class="flex items-center justify-between">
+                  <span>Store File:</span>
+                  <span class="text-slate-400 select-all truncate ml-2 font-mono text-[10px]" title="${s.rawHit.path}">${s.rawHit.path}</span>
+                </div>` : ''}
               </div>
             </div>
-            <div class="pt-3 border-t border-[var(--border)]">
-              <div class="flex justify-between text-xs mb-1">
-                <span>Context Window Usage (${s.tokens})</span>
-                <span class="text-emerald-300">28% · Safe for handoff</span>
+
+            <div class="pt-3 border-t border-[var(--border)] mt-4">
+              <div class="flex justify-between text-xs mb-1 font-mono">
+                <span>Context Window (${s.tokens} tokens)</span>
+                <span class="${isGrok && rawTokens >= triggerLimit ? 'text-amber-400 font-bold' : 'text-emerald-300'}">${statusText}</span>
               </div>
-              <div class="w-full h-2.5 rounded bg-[var(--background)] overflow-hidden">
-                <div class="h-full bg-emerald-500 w-1/3"></div>
+              <div class="w-full h-3 rounded bg-[var(--background)] overflow-hidden relative border border-[#222E42]">
+                <div class="h-full ${gaugeColor}" style="width:${Math.max(4, pct)}%"></div>
+                ${isGrok ? `
+                <!-- 170k resession trigger marker -->
+                <div class="absolute top-0 bottom-0 w-0.5 bg-amber-400 z-10" style="left:85%" title="170k Resession Trigger"></div>
+                <!-- 180k hard ceiling marker -->
+                <div class="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10" style="left:90%" title="180k Hard Ceiling"></div>
+                ` : ''}
               </div>
+              ${isGrok ? `
+              <div class="flex justify-between text-[10px] text-slate-500 font-mono mt-1">
+                <span>0k</span>
+                <span class="text-amber-400">170k Trigger</span>
+                <span class="text-red-400">180k Hard Stop</span>
+                <span>200k Max</span>
+              </div>` : ''}
             </div>
           </div>
         </div>
@@ -2728,16 +3175,18 @@ function updateUI() {
       }
       state.leftScope = 'sessions';
       state.mainMode = 'session';
+      loadSessionTranscript(id);
       updateUI();
       const s = SESSIONS.find(x => x.id === id);
-      if (s) flash(`Opened "${s.title}" in top session tab bar (Hermes multi-tab style)`);
+      if (s) flash(`Opened "${s.title}" in session inspector`);
     }
 
     function closeSessionTab(ev, id) {
       ev.stopPropagation();
       state.openTabs = state.openTabs.filter(x => x !== id);
       if (state.selectedId === id) {
-        state.selectedId = state.openTabs[0] || SESSIONS[0].id;
+        state.selectedId = state.openTabs[0] || (SESSIONS[0] && SESSIONS[0].id) || '';
+        if (state.selectedId) loadSessionTranscript(state.selectedId);
       }
       if (state.openTabs.length === 0) {
         state.mainMode = 'table';
@@ -2750,7 +3199,7 @@ function updateUI() {
       if (next) {
         openSessionTab(next.id);
       } else {
-        flash('All sample sessions are already open in tabs');
+        flash('All visible sessions are already open in tabs');
       }
     }
 
@@ -2863,27 +3312,88 @@ function updateUI() {
       openSessionTab(state.selectedId);
     }
 
-    function resumeSelected() {
+    async function resumeSelected() {
       const s = SESSIONS.find(x => x.id === state.selectedId) || SESSIONS[0];
-      flash(`Resume launched: ${MAKERS[s.maker].fullName} --resume (${s.id}) in ${s.cwd}`);
+      if (!s) return;
+      const m = MAKERS[s.maker] || MAKERS.claude;
+      flash(`Launching resume for "${s.title}"...`);
+      try {
+        const res = await runApi('resume', { id: s.id, launch: true });
+        if (res.kind === 'LAUNCHED') {
+          flash(`🚀 Launched resume console (PID ${res.pid}): ${res.argv ? res.argv.join(' ') : s.id}`);
+        } else if (res.kind === 'BINARY_ABSENT') {
+          const cmd = res.argv ? res.argv.join(' ') : `${s.maker} --resume ${s.vendor_id || s.id}`;
+          try { navigator.clipboard.writeText(cmd); } catch (e) {}
+          flash(`⚠️ Binary not in PATH. Resume command: ${cmd} (copied to clipboard)`);
+        } else {
+          const cmd = res.argv ? res.argv.join(' ') : `${s.maker} --resume ${s.vendor_id || s.id}`;
+          try { navigator.clipboard.writeText(cmd); } catch (e) {}
+          flash(`Resume command ready: ${cmd} (copied to clipboard)`);
+        }
+      } catch (err) {
+        flash(`Resume error: ${err.message}`);
+      }
     }
 
-    function handoffSelected() {
+    async function handoffSelected() {
       const s = SESSIONS.find(x => x.id === state.selectedId) || SESSIONS[0];
-      flash(`Handed off "${s.title}" with carried transcript; new child session recorded`);
+      if (!s) return;
+      const picker = document.getElementById('handoffPicker');
+      const target = picker ? picker.value : 'Antigravity · Gemini 4 Argon';
+      flash(`Exporting transcript of "${s.title}" for handoff to ${target}...`);
+      try {
+        const res = await runApi('export', { id: s.id });
+        if (res.kind === 'OK' && res.path) {
+          try { navigator.clipboard.writeText(res.path); } catch (e) {}
+          flash(`✅ Exported handoff transcript to: ${res.path} (copied path)`);
+        } else {
+          flash(`Handoff export: ${res.kind || 'Finished'}`);
+        }
+      } catch (err) {
+        flash(`Handoff error: ${err.message}`);
+      }
     }
 
-    function repairSelected() {
+    async function repairSelected() {
       const s = SESSIONS.find(x => x.id === state.selectedId) || SESSIONS[0];
-      flash(`Repair check on "${s.title}": staged original to var/stage & verified backup integrity`);
+      if (!s) return;
+      const target = (s.rawHit && s.rawHit.path) || s.cwd;
+      if (!target) {
+        flash(`No file path recorded for "${s.title}"`);
+        return;
+      }
+      flash(`Checking repair & backup integrity for "${s.title}"...`);
+      try {
+        const res = await runApi('recover', { target: target });
+        flash(`Repair check: ${res.kind} (${res.detail || 'Checked .bak integrity'})`);
+      } catch (err) {
+        flash(`Repair check result: ${err.message}`);
+      }
     }
 
-    function saveAsAction() {
-      flash('Saved current session / table view export to disk');
+    async function saveAsAction() {
+      const s = SESSIONS.find(x => x.id === state.selectedId) || SESSIONS[0];
+      if (!s) return;
+      flash(`Saving export for "${s.title}"...`);
+      try {
+        const res = await runApi('export', { id: s.id });
+        if (res.kind === 'OK' && res.path) {
+          flash(`✅ Saved markdown transcript to: ${res.path}`);
+        } else {
+          flash(`Save status: ${res.kind || 'OK'}`);
+        }
+      } catch (err) {
+        flash(`Save error: ${err.message}`);
+      }
     }
 
     function flash(msg) {
-      document.getElementById('statusBarText').textContent = msg;
+      const el = document.getElementById('statusBarText');
+      if (el) {
+        el.textContent = msg;
+        el.classList.add('text-blue-300');
+        setTimeout(() => el.classList.remove('text-blue-300'), 3500);
+      }
     }
 
     function applyDesktopScale() {
@@ -2908,6 +3418,7 @@ function updateUI() {
     document.addEventListener('fullscreenchange', applyDesktopScale);
     applyDesktopScale();
     updateUI();
+    loadLiveSessions(false);
   
     // =========================================================================
     // DYNAMIC DRAGGABLE COLUMN RESIZING ENGINE

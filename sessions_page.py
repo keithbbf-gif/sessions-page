@@ -226,6 +226,13 @@ def _serve(port: int, open_browser: bool = False) -> int:
     except OSError as exc:
         _emit(json.dumps({"kind": "BIND_FAILED", "port": port, "detail": str(exc)}))
         return 2
+    def _prewarm() -> None:
+        try:
+            engine.find(limit=250)
+        except Exception:
+            pass
+    threading.Thread(target=_prewarm, daemon=True).start()
+
     if open_browser:
         def _later() -> None:
             for _ in range(50):

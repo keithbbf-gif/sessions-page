@@ -4208,7 +4208,9 @@ def dispatch(action: str, body: dict | None = None, homes: dict | None = None) -
         rec_id = str(body.get("id") or "")
         if not rec_id:
             raise PageError("NOT_FOUND", "id is required")
-        return preview(rec_id, homes=homes if homes is not None else _homes_for(body))
+        n_turns = int(body.get("turns") or 6)
+        n_chars = int(body.get("chars") or 400)
+        return preview(rec_id, homes=homes if homes is not None else _homes_for(body), turns=n_turns, chars=n_chars)
     if action == "find":
         flag = body.get("fresh", False)
         if not isinstance(flag, bool):
