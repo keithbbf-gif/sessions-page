@@ -26,14 +26,11 @@ cd sessions-page
 ### Step B: Run the Application Directly
 Make sure Python 3.14 (or Python 3.12/3.13) is installed.
 ```powershell
-# 1. Launch the standalone desktop app window (Full Screen UI):
-py -3.14 sessions_page.py
-
-# 2. Or serve in a standard browser with live reload:
+# 1. Serve in your browser with instant hot-reload (recommended for UI dev):
 py -3.14 sessions_page.py serve --port 8786
-# Open http://127.0.0.1:8786 in your browser
+# Open http://127.0.0.1:8786 in your browser (hit F5 to reload UI edits)
 
-# 3. Or launch the raw Tkinter desktop ledger:
+# 2. Or launch the raw Tkinter desktop ledger:
 py -3.14 sessions_page.py desk
 ```
 
@@ -91,7 +88,7 @@ Here are the primary areas ready for your inspection and polish:
 
 Once your UI changes are tested and green:
 ```powershell
-py -3.14 -m PyInstaller sessions_page.spec
+py -3.14 -m PyInstaller --noconfirm --distpath dist_desk sessions_page.spec
 ```
 The compiled standalone binary will be generated at `dist_desk\sessions_page.exe`.
 

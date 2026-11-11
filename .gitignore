@@ -6,3 +6,5 @@ dist_new/
 build/
 var/
 install/windows/out/
+dist_pkg/
+*.zip

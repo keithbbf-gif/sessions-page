@@ -36,7 +36,7 @@ DEFAULT_LIMIT = 200
 VERBS = (
     "find", "preview", "import", "export", "index", "recover", "resume",
     "scan", "load", "convert", "diff", "check", "anonymize",
-    "crash-recover", "strip", "strip_dry", "doi", "formats",
+    "crash-recover", "strip", "strip_dry", "doi", "formats", "handoff",
 )
 
 HARNESSES = (
@@ -1159,21 +1159,28 @@ def _enum_codex(root: Path) -> list[dict]:
 
 def _enum_codex_db(db: Path) -> list[dict]:
     hits = []
+    con = None
     try:
         uri = db.resolve().as_uri() + "?mode=ro"
         con = sqlite3.connect(uri, uri=True, timeout=1.0)
         cols = {r[1] for r in con.execute("PRAGMA table_info(threads)")}
         if not {"id", "cwd"}.issubset(cols):
-            con.close()
             return []
         title_col = "title" if "title" in cols else "''"
         path_col = "rollout_path" if "rollout_path" in cols else "''"
         rows = con.execute(
             f"SELECT id, cwd, {title_col}, {path_col} FROM threads"
         ).fetchall()
-        con.close()
     except sqlite3.Error:
         return []
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+            del con
+            gc.collect()
     for sid, cwd, title, rollout in rows:
         path = Path(rollout) if rollout else db
         hits.append(_hit(
@@ -1258,12 +1265,12 @@ def _enum_cursor_desktop() -> list[dict]:
     if not path.is_file() or path.is_symlink():
         return []
     hits = []
+    con = None
     try:
         uri = path.resolve().as_uri() + "?mode=ro"
         con = sqlite3.connect(uri, uri=True, timeout=1.0)
         cols = {row[1] for row in con.execute("PRAGMA table_info(composerHeaders)")}
         if not {"composerId", "lastUpdatedAt", "isArchived", "isSubagent", "value"}.issubset(cols):
-            con.close()
             return []
         rows = con.execute(
             "SELECT composerId, lastUpdatedAt, value FROM composerHeaders "
@@ -1293,9 +1300,16 @@ def _enum_cursor_desktop() -> list[dict]:
             hits.append(_hit(
                 harness="cursor", vendor_id=sid, path=path, cwd=cwd, title=title, updated=stamp,
             ))
-        con.close()
     except sqlite3.Error:
         return []
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+            del con
+            gc.collect()
     return hits
 
 
@@ -3348,6 +3362,7 @@ def _preview_openwork(hit: dict, n_want: int, chars: int) -> dict:
     if str(hit["vendor_id"]).startswith("ses_cow_"):
         raise PageError("DO_NOT_REINGEST", hit["id"])
     db = Path(hit["path"])
+    con = None
     try:
         uri = db.resolve().as_uri() + "?mode=ro"
         con = sqlite3.connect(uri, uri=True, timeout=1.0)
@@ -3367,9 +3382,16 @@ def _preview_openwork(hit: dict, n_want: int, chars: int) -> dict:
             ))
         except sqlite3.Error:
             prows = []
-        con.close()
     except sqlite3.Error as exc:
         raise PageError("SCHEMA_UNKNOWN", str(exc))
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+            del con
+            gc.collect()
     shown = _clip_turns(_message_turns(msgs, _part_texts(prows)), n_want, chars)
     return _preview_result(hit, "OK", n_turns, shown)
 
@@ -3624,18 +3646,26 @@ def _jsonl_ok(path: Path) -> bool:
 
 
 def _sqlite_state(path: Path) -> tuple[str, str]:
+    con = None
+    integ = "damage"
     try:
         uri = path.resolve().as_uri() + "?mode=ro"
         con = sqlite3.connect(uri, uri=True, timeout=1.0)
-        integ = con.execute("PRAGMA integrity_check").fetchone()[0]
-        con.close()
-        del con
-        gc.collect()
+        row = con.execute("PRAGMA integrity_check").fetchone()
+        integ = row[0] if row else "damage"
     except sqlite3.Error as exc:
         text = str(exc).lower()
         if "locked" in text or "busy" in text or "unable to open" in text or "disk i/o" in text:
             return "busy", str(exc)
         return "damage", str(exc)
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+            del con
+            gc.collect()
     if integ != "ok":
         return "damage", f"integrity={integ}"
     return "ok", "ok"
@@ -4189,6 +4219,20 @@ def check(what: str, path: Path, chair: str = "ccr") -> dict:
     raise PageError("UNMEASURED", what)
 
 
+def _bounded_int(value: object, default: int, lo: int, hi: int, name: str) -> int:
+    if value is None or value is False or value == "":
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise PageError("BAD_INPUT", f"{name} must be an integer")
+    try:
+        number = int(value)
+    except ValueError as exc:
+        raise PageError("BAD_INPUT", f"{name} must be an integer") from exc
+    if number < lo or number > hi:
+        raise PageError("BAD_INPUT", f"{name} out of range ({lo}..{hi})")
+    return number
+
+
 def dispatch(action: str, body: dict | None = None, homes: dict | None = None) -> dict:
     body = body or {}
     action = str(action or body.get("action") or body.get("verb") or "")
@@ -4208,21 +4252,42 @@ def dispatch(action: str, body: dict | None = None, homes: dict | None = None) -
         rec_id = str(body.get("id") or "")
         if not rec_id:
             raise PageError("NOT_FOUND", "id is required")
-        n_turns = int(body.get("turns") or 6)
-        n_chars = int(body.get("chars") or 400)
+        n_turns = _bounded_int(body.get("turns"), 6, 1, 100, "turns")
+        n_chars = _bounded_int(body.get("chars"), 400, 10, 5000, "chars")
         return preview(rec_id, homes=homes if homes is not None else _homes_for(body), turns=n_turns, chars=n_chars)
     if action == "find":
         flag = body.get("fresh", False)
         if not isinstance(flag, bool):
             raise PageError("BAD_INPUT", "fresh must be boolean")
+        n_limit = _bounded_int(body.get("limit"), DEFAULT_LIMIT, 1, 2000, "limit")
         return find(
             homes=homes, query=str(body.get("query") or body.get("q") or ""),
             harness=str(body.get("harness") or body.get("family") or ""),
             cwd=str(body.get("cwd") or ""),
-            limit=int(body.get("limit") or DEFAULT_LIMIT),
+            limit=n_limit,
             drive=str(body.get("drive") or ""),
             fresh=flag,
         )
+    if action == "handoff":
+        rec_id = str(body.get("id") or "")
+        if not rec_id:
+            raise PageError("NOT_FOUND", "id is required")
+        target_harness = str(body.get("target") or body.get("harness") or "grok")
+        dest = Path(body["out"]) if body.get("out") else (var_dir() / "exports")
+        exp = export_md(rec_id, dest, homes=homes if homes is not None else _homes_for(body))
+        hit = _by_id(homes if homes is not None else _homes_for(body), rec_id)
+        out_path = exp.get("gate", {}).get("out") if isinstance(exp.get("gate"), dict) else exp.get("out")
+        entry = {
+            "parent": rec_id,
+            "parent_harness": hit.get("harness") if isinstance(hit, dict) else "",
+            "target": target_harness,
+            "export": str(out_path or ""),
+            "cwd": hit.get("cwd") if isinstance(hit, dict) else "",
+        }
+        handoff_rec = record_handoff(entry)
+        exp["handoff"] = handoff_rec.get("record")
+        exp["verb"] = "handoff"
+        return exp
     if action == "scan":
         store = body.get("store") or body.get("path")
         if not store:

@@ -23,6 +23,26 @@ from .dual_lock_proxy import (
     PreFlightAssertionException,
     CircuitBreakerTrippedException,
 )
+from .scale_indexer import ScaleIndexer
+from .cluster_topology import (
+    ClusterNode,
+    AgentMember,
+    CommitProposal,
+    SeedArtifact,
+    SingleWriterPinManager,
+    DurabilityTriumvirate,
+    ClusterError,
+    FanOutCeilingExceededError,
+    PinLeaseViolationError,
+    VerificationFailureError,
+)
+from .replay_engine import (
+    ReplayEngine,
+    CachedToolRunner,
+    ToolExecutionRecord,
+    TurnCheckpoint,
+    ReplayError,
+)
 
 __all__ = [
     "SessionEvent",
@@ -36,4 +56,20 @@ __all__ = [
     "DualLockProxy",
     "PreFlightAssertionException",
     "CircuitBreakerTrippedException",
+    "ScaleIndexer",
+    "ClusterNode",
+    "AgentMember",
+    "CommitProposal",
+    "SeedArtifact",
+    "SingleWriterPinManager",
+    "DurabilityTriumvirate",
+    "ClusterError",
+    "FanOutCeilingExceededError",
+    "PinLeaseViolationError",
+    "VerificationFailureError",
+    "ReplayEngine",
+    "CachedToolRunner",
+    "ToolExecutionRecord",
+    "TurnCheckpoint",
+    "ReplayError",
 ]

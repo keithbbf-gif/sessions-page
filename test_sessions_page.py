@@ -115,6 +115,7 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             results.append((label, False, f"{type(exc).__name__}: {exc}"))
 
+    os.environ["CMSESSIONS_NO_PREWARM"] = "1"
     root = Path(tempfile.mkdtemp(prefix="sesspage_"))
     _fixture(root)
     homes = _homes(root)
@@ -761,6 +762,13 @@ def main() -> int:
     check("plugin mounts one id and does not call Core",
           lambda: 'getElementById("panel-sessions-page")' in plugin and "cosmos_service" not in plugin
           and "/api/v1/" not in plugin)
+
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/api/shutdown", data=b"{}", timeout=1)
+    except Exception:
+        pass
+    import shutil
+    shutil.rmtree(root, ignore_errors=True)
 
     failed = [label for label, ok, _detail in results if not ok]
     for label, ok, detail in results:

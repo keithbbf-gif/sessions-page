@@ -227,6 +227,8 @@ def _serve(port: int, open_browser: bool = False) -> int:
         _emit(json.dumps({"kind": "BIND_FAILED", "port": port, "detail": str(exc)}))
         return 2
     def _prewarm() -> None:
+        if os.environ.get("CMSESSIONS_NO_PREWARM") or os.environ.get("CMSESSIONS_TEST_MODE"):
+            return
         try:
             engine.find(limit=250)
         except Exception:
