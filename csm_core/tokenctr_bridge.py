@@ -299,6 +299,7 @@ def _fixture_status() -> dict[str, object]:
     """Fixed hermetic reading. A new dict so callers cannot mutate the next call."""
     return {
         "status": "ok",
+        "reason": None,
         "account_label": "fixture",
         "used": 0,
         "limit": 1,
