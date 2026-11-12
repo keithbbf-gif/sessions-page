@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Account — CM Sessions</title>
+  <link rel="stylesheet" href="accounts.css">
+</head>
+<body>
+  <main class="account" id="account-root" aria-busy="true" aria-labelledby="account-title">
+    <header class="account-top">
+      <div>
+        <p class="eyebrow">CM Sessions</p>
+        <h1 id="account-title">Account</h1>
+      </div>
+      <button type="button" id="account-refresh" aria-label="Refresh Token Center status">Refresh</button>
+    </header>
+
+    <p class="rule">There is no cmSessions subscription. The account on this page is Token Center status.</p>
+    <p class="rule sub">Token Center is optional. Search, transcripts, and launch keep working when it is down. This page does not ask for a password or an API key, and it does not store one.</p>
+
+    <section id="panel-loading" class="panel loading" role="status" aria-live="polite" aria-labelledby="loading-title">
+      <span class="pulse" aria-hidden="true"></span>
+      <h2 id="loading-title">Loading Token Center status</h2>
+      <p>Asking the local page for account_status. No balance is shown until Token Center actually answers.</p>
+    </section>
+
+    <section id="panel-unavailable" class="panel unavailable" hidden role="status" aria-live="polite" aria-labelledby="unavailable-title">
+      <h2 id="unavailable-title">Token Center unavailable</h2>
+      <p id="unavailable-reason">csm_core.tokenctr_bridge is missing.</p>
+      <p id="unavailable-detail">Token Center status is unavailable. No balance is shown.</p>
+      <dl>
+        <div>
+          <dt>Account</dt>
+          <dd>Token Center</dd>
+        </div>
+        <div>
+          <dt>cmSessions subscription</dt>
+          <dd>None</dd>
+        </div>
+        <div>
+          <dt>Bridge</dt>
+          <dd id="unavailable-bridge">csm_core.tokenctr_bridge</dd>
+        </div>
+        <div>
+          <dt>Balance</dt>
+          <dd>Not shown</dd>
+        </div>
+        <div>
+          <dt>Burn today</dt>
+          <dd>Not shown</dd>
+        </div>
+      </dl>
+    </section>
+
+    <section id="panel-status" class="panel status" hidden role="status" aria-live="polite" aria-labelledby="status-title">
+      <h2 id="status-title">Token Center</h2>
+      <dl>
+        <div>
+          <dt>Identity</dt>
+          <dd id="status-identity">Not reported</dd>
+        </div>
+        <div>
+          <dt>Balance</dt>
+          <dd id="status-balance">Not reported</dd>
+        </div>
+        <div>
+          <dt>Burn today</dt>
+          <dd id="status-burn">Not reported</dd>
+        </div>
+        <div>
+          <dt>cmSessions subscription</dt>
+          <dd>None</dd>
+        </div>
+        <div>
+          <dt>Bridge</dt>
+          <dd id="status-bridge">csm_core.tokenctr_bridge</dd>
+        </div>
+      </dl>
+      <p id="status-note"></p>
+    </section>
+  </main>
+  <script src="accounts.js"></script>
+</body>
+</html>
