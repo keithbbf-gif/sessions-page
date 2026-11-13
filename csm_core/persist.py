@@ -27,7 +27,7 @@ FIELDS = ("theme", "density", "page_size")
 
 DEFAULT_THEME = "dark"
 DEFAULT_DENSITY = "comfortable"
-DEFAULT_PAGE_SIZE = 50
+DEFAULT_PAGE_SIZE = 100
 
 THEMES = ("dark", "light", "clam")
 DENSITIES = ("comfortable", "compact", "dense")

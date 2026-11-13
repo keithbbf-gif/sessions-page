@@ -1,8 +1,8 @@
 # Accounts and settings
 
-There is no account and no settings page. Nothing in this build signs you in, and nothing reads a Token Center balance.
+The full-screen page links to `/accounts.html` and `/settings.html`. Those files are served from `ui/` by `sessions_page._serve`. Accounts shows Token Center status and does not invent a balance. Settings stores theme, row density, and page size in this browser. Nothing on either page signs you in.
 
-The pages that exist are `/`, `/index.html`, and `/index_classic.html`, plus `/app.js`, `/app.css`, and the three png files beside them. `GET /api/verbs`, `GET /api/homes`, and `GET /api/places` are the only other reads. `POST /api/run` and `POST /api/shutdown` are the only writes to the local page. There is no `/account`, no `/settings`, and no account action on `/api/run`. The command list has no `account` command and no `settings` command. The desk has no account screen.
+`POST /api/run` accepts `account_status`. If the TokenCTR bridge is not configured, the response is `status: unavailable`. The older title-bar controls described below still only write a status line.
 
 ## What the account buttons do
 
