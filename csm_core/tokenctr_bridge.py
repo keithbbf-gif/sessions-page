@@ -1,7 +1,7 @@
 """Read-only Token Center account status and usage gauge.
 
 Network is used only when CMSESSIONS_TOKENCTR_URL is an http(s) loopback
-base URL. The call is a single GET of ``{base}/account/status``. This module
+base URL. The call is a single GET of ``{base}/v1/account``. This module
 does not charge, create an account, send credentials, or return API keys.
 usage_gauge copies used and limit only when that response measures them.
 account_status returns status, reason, account_label, used, and limit.
@@ -29,7 +29,7 @@ _FIXTURE_ENV = "CMSESSIONS_TOKENCTR_FIXTURE"
 _TIMEOUT_S = 3.0
 _MAX_BYTES = 65536
 _MAX_URL = 512
-_STATUS_SUFFIX = "/account/status"
+_STATUS_SUFFIX = "/v1/account"
 
 # Path segments that must never be requested. Status is not a mutation.
 _BLOCKED_SEGMENTS = frozenset({
@@ -179,7 +179,7 @@ def _status_url(base: str) -> str | None:
     if _blocked_path(path):
         return None
     trimmed = path.rstrip("/")
-    if trimmed.lower().endswith(_STATUS_SUFFIX) or trimmed.lower().endswith("/status"):
+    if trimmed.lower().endswith(_STATUS_SUFFIX):
         status_path = trimmed if trimmed.startswith("/") else "/" + trimmed
     else:
         status_path = (trimmed.rstrip("/") + _STATUS_SUFFIX) if trimmed else _STATUS_SUFFIX
