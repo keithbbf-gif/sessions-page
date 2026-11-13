@@ -14,7 +14,9 @@ _GROUPS = (
 # Old desk tools, remapped onto the ledger. Not separate pages.
 _MORE = (
     ("Refresh", "_load_all"),
+    ("Preview", "_on_preview"),
     ("Build index", "_on_index"),
+    ("Formats", "_on_formats"),
     ("Load", "_on_load"),
     ("Import", "_on_import"),
     ("Export", "_on_export"),

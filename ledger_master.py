@@ -1026,8 +1026,20 @@ def _popup_more(desk) -> None:
     try:
         menu = tk.Menu(desk.root, tearoff=0, bg=CARD, fg=INK,
                        activebackground="#1E2430", activeforeground=INK)
-        for label, name in (("Refresh", "_load_all"), ("Build index", "_on_index"),
-                            ("Quit", "_on_quit")):
+        for label, name in (
+            ("Refresh", "_load_all"),
+            ("Preview", "_on_preview"),
+            ("Build index", "_on_index"),
+            ("Import", "_on_import"),
+            ("Export", "_on_export"),
+            ("Formats", "_on_formats"),
+            ("Check recovery", "_on_recover"),
+            ("Restore", "_on_restore"),
+            ("Anonymize", "_on_anonymize"),
+            ("Check strip", "_on_strip_dry"),
+            ("Write strip", "_on_strip"),
+            ("Quit", "_on_quit"),
+        ):
             fn = getattr(desk, name, None)
             if callable(fn):
                 menu.add_command(label=label, command=fn)

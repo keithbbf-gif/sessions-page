@@ -20,6 +20,7 @@ existing /api/v1/session_tools route.
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import sys
@@ -36,6 +37,77 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import engine
+
+# Desk, the full-screen page, the classic page, and the deck plug already
+# name these. Each one is an engine verb. /api/run and the matching CLI
+# command call engine.dispatch. They are not local flash stubs.
+ADVERTISED = (
+    "find", "preview", "import", "export", "index", "recover", "resume",
+    "load", "formats", "handoff", "anonymize", "crash-recover",
+    "strip", "strip_dry",
+)
+_SERVE_HOST = "127.0.0.1"
+_SERVE_PORT = 8786
+
+
+def _soft_import(name: str):
+    """Optional sibling modules. Absence must not stop this branch."""
+    try:
+        return importlib.import_module(name)
+    except Exception:
+        return None
+
+
+_CSM_ERRORS = _soft_import("csm_core.errors")
+_CSM_PERSIST = _soft_import("csm_core.persist")
+_CSM_TOKENCTR = _soft_import("csm_core.tokenctr_bridge")
+
+
+def _error_types() -> tuple[type, ...]:
+    types: list[type] = [engine.PageError]
+    mod = _OPTIONAL[0]
+    extra = getattr(mod, "PageError", None) if mod is not None else None
+    if isinstance(extra, type) and issubclass(extra, BaseException) and extra not in types:
+        types.append(extra)
+    return tuple(types)
+
+
+def _verb_names() -> list[str]:
+    """Engine verbs, with every advertised name present so /api/verbs matches the page."""
+    names = list(engine.VERBS)
+    have = set(names)
+    for name in ADVERTISED:
+        if name not in have:
+            names.append(name)
+            have.add(name)
+    return names
+
+
+def _dispatch(action: str, body: dict | None = None) -> dict:
+    """Run one verb through the engine. There is no local flash stub."""
+    payload = body if isinstance(body, dict) else {}
+    name = str(action or payload.get("action") or payload.get("verb") or "").strip()
+    return engine.dispatch(name, payload)
+
+
+def _account_status() -> dict:
+    """Token Center status. A missing bridge stays unavailable and opens no socket."""
+    unavailable = {"status": "unavailable", "reason": "not_configured"}
+    mod = _soft_import("csm_core.tokenctr_bridge")
+    fn = getattr(mod, "account_status", None) if mod is not None else None
+    if not callable(fn):
+        return unavailable
+    try:
+        rec = fn()
+    except Exception:
+        return unavailable
+    if not isinstance(rec, dict):
+        return unavailable
+    return rec
+
+
+# Kept so the three optional imports stay live. None means that module is absent.
+_OPTIONAL = (_CSM_ERRORS, _CSM_PERSIST, _CSM_TOKENCTR)
 
 
 def _ui_dir() -> Path:
@@ -111,6 +183,12 @@ def _serve(port: int, open_browser: bool = False) -> int:
         "/cmsessions_fullscreen.png": ui / "cmsessions_fullscreen.png",
         "/cmsessions_calendar_fullscreen.png": ui / "cmsessions_calendar_fullscreen.png",
         "/cmsessions_calendar_week_fullscreen.png": ui / "cmsessions_calendar_week_fullscreen.png",
+        "/accounts.html": ui / "accounts.html",
+        "/accounts.js": ui / "accounts.js",
+        "/accounts.css": ui / "accounts.css",
+        "/settings.html": ui / "settings.html",
+        "/settings.js": ui / "settings.js",
+        "/settings.css": ui / "settings.css",
     }
 
     class Handler(BaseHTTPRequestHandler):
@@ -159,7 +237,7 @@ def _serve(port: int, open_browser: bool = False) -> int:
         def _get(self) -> None:
             path = self.path.split("?", 1)[0]
             if path == "/api/verbs":
-                self._json(200, {"verbs": list(engine.VERBS), "harnesses": list(engine.HARNESSES)})
+                self._json(200, {"verbs": _verb_names(), "harnesses": list(engine.HARNESSES)})
                 return
             if path == "/api/homes":
                 self._json(200, {"homes": engine.home_status()})
@@ -208,10 +286,14 @@ def _serve(port: int, open_browser: bool = False) -> int:
             if not isinstance(body, dict):
                 self._json(400, {"error": "BAD_REQUEST", "detail": "body must be an object"})
                 return
+            action = str(body.get("action") or body.get("verb") or "").strip()
+            if action == "account_status":
+                self._json(200, _account_status())
+                return
             try:
-                rec = engine.dispatch(str(body.get("action") or ""), body)
-            except engine.PageError as exc:
-                self._json(400, {"error": exc.kind, "detail": str(exc)})
+                rec = _dispatch(action, body)
+            except _error_types() as exc:
+                self._json(400, {"error": getattr(exc, "kind", "BAD_ACTION"), "detail": str(exc)})
                 return
             except Exception as exc:  # noqa: BLE001
                 self._json(500, {"error": "INTERNAL", "detail": type(exc).__name__})
@@ -222,7 +304,7 @@ def _serve(port: int, open_browser: bool = False) -> int:
         daemon_threads = True
 
     try:
-        httpd = Bound(("127.0.0.1", port), Handler)
+        httpd = Bound((_SERVE_HOST, port), Handler)
     except OSError as exc:
         _emit(json.dumps({"kind": "BIND_FAILED", "port": port, "detail": str(exc)}))
         return 2
@@ -306,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
     ld.add_argument("--store", default="")
 
     srv = sub.add_parser("serve")
-    srv.add_argument("--port", type=int, default=8786)
+    srv.add_argument("--port", type=int, default=_SERVE_PORT)
     srv.add_argument("--no-browser", action="store_true")
     sub.add_parser("verbs")
     sub.add_parser("desk")
@@ -315,31 +397,40 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.cmd == "find":
-            return _print(engine.find(query=args.query, harness=args.harness, cwd=args.cwd, limit=args.limit))
+            return _print(_dispatch("find", {
+                "query": args.query, "harness": args.harness,
+                "cwd": args.cwd, "limit": args.limit,
+            }))
         if args.cmd == "import":
-            out = Path(args.out) if args.out else engine.var_dir() / "exports"
-            return _print(engine.import_session(args.id, out))
+            body = {"id": args.id}
+            if args.out:
+                body["out"] = args.out
+            return _print(_dispatch("import", body))
         if args.cmd == "export":
-            out = Path(args.out) if args.out else engine.var_dir() / "exports"
-            return _print(engine.export_md(args.id, out))
+            body = {"id": args.id}
+            if args.out:
+                body["out"] = args.out
+            return _print(_dispatch("export", body))
         if args.cmd == "index":
-            out = Path(args.out) if args.out else None
-            return _print(engine.build_index(out))
+            body = {"out": args.out} if args.out else {}
+            return _print(_dispatch("index", body))
         if args.cmd == "recover":
-            bak = Path(args.bak) if args.bak else None
-            return _print(engine.recover(Path(args.target), bak, apply=args.apply))
+            body = {"target": args.target, "apply": args.apply}
+            if args.bak:
+                body["bak"] = args.bak
+            return _print(_dispatch("recover", body))
         if args.cmd == "resume":
-            return _print(engine.resume(args.id, launch=args.launch))
+            return _print(_dispatch("resume", {"id": args.id, "launch": args.launch}))
         if args.cmd == "scan":
-            return _print(engine.scan(Path(args.store)))
+            return _print(_dispatch("scan", {"store": args.store}))
         if args.cmd == "load":
             body = {"id": args.id}
             if args.store:
                 body["store"] = args.store
-            return _print(engine.dispatch("load", body))
+            return _print(_dispatch("load", body))
         if args.cmd == "verbs":
             return _print({"schema": engine.SCHEMA, "verb": "verbs", "kind": "OK",
-                           "gate": {"verbs": list(engine.VERBS), "harnesses": list(engine.HARNESSES)},
+                           "gate": {"verbs": _verb_names(), "harnesses": list(engine.HARNESSES)},
                            "legal_omitted": 0})
         if args.cmd == "serve":
             return _serve(args.port, open_browser=not args.no_browser)
@@ -347,10 +438,11 @@ def main(argv: list[str] | None = None) -> int:
             import desk
             return desk.main()
         if args.cmd == "formats":
-            return _print(engine.dispatch("formats"))
-    except engine.PageError as exc:
-        print(json.dumps({"schema": engine.SCHEMA, "verb": args.cmd, "kind": exc.kind,
-                          "gate": {"detail": str(exc)}, "legal_omitted": int(exc.kind == "LEGAL_OMITTED")}))
+            return _print(_dispatch("formats", {}))
+    except _error_types() as exc:
+        kind = getattr(exc, "kind", "BAD_ACTION")
+        print(json.dumps({"schema": engine.SCHEMA, "verb": args.cmd, "kind": kind,
+                          "gate": {"detail": str(exc)}, "legal_omitted": int(kind == "LEGAL_OMITTED")}))
         return 2
     return 2
 

@@ -1204,16 +1204,41 @@ class _Desk:
             return None
         return "break"
 
-    def _set_preview(self, text: str) -> None:
-        self.preview.delete("1.0", "end")
-        self.preview.insert("1.0", text)
-        sheets = getattr(self, "sheets", None)
-        if sheets is not None:
-            sheets.note_preview(text)
-        widget = getattr(self, "ledger_session_text", None)
-        if widget is not None:
+    def _write_text(self, widget, text: str) -> None:
+        if widget is None:
+            return
+        try:
+            state = str(widget.cget("state"))
+        except Exception:
+            return
+        try:
+            if state == "disabled":
+                widget.configure(state="normal")
             widget.delete("1.0", "end")
             widget.insert("1.0", text)
+            if state == "disabled":
+                widget.configure(state="disabled")
+        except Exception:
+            return
+
+    def _set_preview(self, text: str) -> None:
+        self._write_text(getattr(self, "preview", None), text)
+        sheets = getattr(self, "sheets", None)
+        if sheets is not None:
+            try:
+                sheets.note_preview(text)
+            except Exception:
+                pass
+        self._write_text(getattr(self, "ledger_session_text", None), text)
+
+    def _show_session(self) -> None:
+        show = getattr(self, "show_ledger_body", None)
+        if not callable(show):
+            return
+        try:
+            show("session")
+        except Exception:
+            return
 
     def _show(self, obj: dict) -> None:
         shown = obj
@@ -1838,6 +1863,7 @@ class _Desk:
         hit = self._need_hit()
         if hit is None:
             return
+        self._show_session()
         self._set_preview("Reading a short preview…")
         self._fetch_preview(self.selected_index, str(hit.get("id") or ""))
 
@@ -1891,8 +1917,13 @@ class _Desk:
 
         def go() -> None:
             rec = engine.dispatch("import", {"id": str(hit.get("id") or "")})
-            self._say("The source was left in place.", _tone(rec))
-            self._set_out("The source was left in place.\n\n" + _dump(rec))
+            written = rec.get("written") if isinstance(rec.get("written"), dict) else {}
+            path = str(written.get("jsonl") or "")
+            line = "The source was left in place."
+            if path:
+                line = f"{line} {path}"
+            self._say(line, _tone(rec))
+            self._set_out(line + "\n\n" + _dump(rec))
 
         self._guard(go)
 
@@ -1920,15 +1951,21 @@ class _Desk:
         def go() -> None:
             rec = engine.dispatch("formats")
             gate = rec.get("gate") if isinstance(rec.get("gate"), dict) else {}
-            lines = [str(rec.get("kind") or "")]
+            lines = []
+            n = 0
             for row in gate.get("formats") or []:
                 if not isinstance(row, dict):
                     continue
+                n += 1
                 lines.append(
                     f"{row.get('harness') or ''}  {row.get('load') or ''}  {row.get('resume') or ''}"
                 )
-            self._say(lines[0] or "Formats", _tone(rec))
-            self._set_out("\n".join(lines))
+            summary = f"{n} formats." if n else (str(rec.get("kind") or "") or "Formats")
+            body = summary + ("\n" + "\n".join(lines) if lines else "")
+            self._say(summary, _tone(rec))
+            self._set_out(body)
+            self._show_session()
+            self._set_preview(body)
 
         self._guard(go)
 
