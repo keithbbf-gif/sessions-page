@@ -23,7 +23,7 @@ A live census is not one of these scripts. The counts in [consumer/load-and-resu
 What each file is for:
 
 - `test_cli_formats.py` runs the `formats` command and checks the printed index. It does not open the desk and does not bind a port.
-- `test_cosmos_code_hook.py` checks that the hook has no port, that `writes_live` is false, and that the verbs are find, load, resume, and formats ([test_cosmos_code_hook.py](../test_cosmos_code_hook.py) `test_cosmos_code_hook.main`; [cosmos_code_hook.py](../cosmos_code_hook.py) `cosmos_code_hook.descriptor`). Opening the plug does not bind a socket.
+- `test_cosmos_code_hook.py` checks that the hook has no port, that `writes_live` is false, and that the verbs are find, load, resume, and formats ([test_cosmos_code_hook.py](../test_cosmos_code_hook.py) `test_descriptor_in_process`; [cosmos_code_hook.py](../cosmos_code_hook.py) `cosmos_code_hook.descriptor`). Opening the plug does not bind a socket ([test_cosmos_code_hook.py](../test_cosmos_code_hook.py) `test_open_plugin_returns_dict_without_bind`).
 - `test_desk.py` checks resume plans and the load plan ([test_desk.py](../test_desk.py) `test_desk.main`; [desk.py](../desk.py) `desk.plan_resume`, `desk.plan_load`). Importing the desk does not open a window and does not bind a socket ([test_desk.py](../test_desk.py) `test_desk.main`; [desk.py](../desk.py) `desk.claim_instance`).
 - `test_formats.py` checks the format-index keys, the harness prefixes, and the extra rows that are not walked. It does not walk a live home.
 - `test_frozen_root.py` checks that a frozen `product_root` and `var` sit beside the exe, and that an unfrozen root stays beside the source.
