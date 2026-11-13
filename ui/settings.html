@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-density="regular" data-page-size="50">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CM Sessions — Settings</title>
+  <script src="settings.js"></script>
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <span class="mark" aria-hidden="true"></span>
+        <div class="brand-block">
+          <strong>CM Sessions</strong>
+          <span>Settings on this machine</span>
+        </div>
+      </div>
+      <a class="back" href="index.html" aria-label="Back to sessions">Sessions</a>
+    </header>
+
+    <main class="sheet-page" aria-labelledby="settings-title">
+      <p class="kicker">Local</p>
+      <h1 id="settings-title">Settings</h1>
+      <p class="lede">Theme, row density, and page size stay in this browser. This page does not sign in, open network sessions, or join a mesh.</p>
+
+      <form id="settings-form" autocomplete="off">
+        <fieldset>
+          <legend>Theme</legend>
+          <div class="choices" role="radiogroup" aria-label="Theme">
+            <label class="choice" for="theme-dark">
+              <input type="radio" id="theme-dark" name="theme" value="dark">
+              <span>Dark</span>
+              <small>Blackline ground</small>
+            </label>
+            <label class="choice" for="theme-light">
+              <input type="radio" id="theme-light" name="theme" value="light">
+              <span>Light</span>
+              <small>Paper ground</small>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset aria-describedby="density-hint">
+          <legend>Row density</legend>
+          <div class="choices" role="radiogroup" aria-label="Row density">
+            <label class="choice" for="density-compact">
+              <input type="radio" id="density-compact" name="rowDensity" value="compact">
+              <span>Compact</span>
+              <small>Tighter rows</small>
+            </label>
+            <label class="choice" for="density-regular">
+              <input type="radio" id="density-regular" name="rowDensity" value="regular">
+              <span>Regular</span>
+              <small>Default rows</small>
+            </label>
+            <label class="choice" for="density-comfortable">
+              <input type="radio" id="density-comfortable" name="rowDensity" value="comfortable">
+              <span>Comfortable</span>
+              <small>More space</small>
+            </label>
+          </div>
+          <div class="preview" aria-hidden="true">
+            <div class="preview-row"><i></i><b></b></div>
+            <div class="preview-row"><i></i><b></b></div>
+            <div class="preview-row"><i></i><b></b></div>
+          </div>
+          <p class="hint" id="density-hint">Preview of row height only. Not a session list.</p>
+        </fieldset>
+
+        <fieldset aria-describedby="page-size-hint">
+          <legend>Page size</legend>
+          <p class="hint" id="page-size-hint">How many rows the session table shows at once.</p>
+          <div class="choices sizes" role="radiogroup" aria-label="Page size">
+            <label class="choice size" for="page-size-25">
+              <input type="radio" id="page-size-25" name="pageSize" value="25">
+              <span>25</span>
+            </label>
+            <label class="choice size" for="page-size-50">
+              <input type="radio" id="page-size-50" name="pageSize" value="50">
+              <span>50</span>
+            </label>
+            <label class="choice size" for="page-size-100">
+              <input type="radio" id="page-size-100" name="pageSize" value="100">
+              <span>100</span>
+            </label>
+            <label class="choice size" for="page-size-200">
+              <input type="radio" id="page-size-200" name="pageSize" value="200">
+              <span>200</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <div class="actions">
+          <p id="page-readout" class="readout" aria-live="polite" aria-atomic="true"></p>
+          <button type="button" id="reset-settings" aria-label="Reset to defaults on this machine">Reset to defaults</button>
+        </div>
+      </form>
+
+      <p id="status" class="status" role="status"></p>
+      <p class="foot-note">Stored locally under <code>cmSessions.settings</code>.</p>
+    </main>
+  </div>
+</body>
+</html>
