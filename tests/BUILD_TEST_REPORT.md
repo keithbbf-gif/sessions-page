@@ -1,6 +1,6 @@
 # BUILD_TEST_REPORT
 
-Exact text from each testing done file. Nothing rewritten.
+Exact text from each testing done file after the heroes finished. Script totals below were re-run on this worktree. The pytest block is the remeasured pytest output.
 
 ## testing-Tst-Spine.done
 
@@ -139,7 +139,6 @@ ok   status, tokens, and parent stay inside the record
 ok   crashed rows stay and unknown times sort last
 10/10
 
-
 ## testing-Tst-Core.done
 
 ok   lmdb event roundtrip
@@ -161,10 +160,26 @@ EXIT:0
 Tst-Skip done 2026-11-12.
 
 Created only:
-- tests/test_sibling_modules.py
+- V:\A\Ai\sessions-page-teams\testing\tests\test_sibling_modules.py
 
 Each test imports one of csm_core.errors, csm_core.persist, csm_core.tokenctr_bridge, csm_core.cosmos_pointer. A failed import skips that test. A successful import asserts errors.CODES when present, otherwise the module's public functions.
 
 Command: py -3.14 -m pytest tests/test_sibling_modules.py -q --tb=line
-Result: 4 skipped in 0.08s (exit 0). None of the four modules import on this branch.
-No product code edited.
+Result: 4 skipped in 0.08s (exit 0). None of the four modules import from testing/csm_core yet.
+No product code edited. No spawn, no commit, no push.
+
+## pytest
+
+```
+..ssss                                                                   [100%]
+=========================== short test summary info ===========================
+SKIPPED [1] tests\test_sibling_modules.py:25: csm_core.errors is not importable: ModuleNotFoundError: No module named 'csm_core.errors'
+SKIPPED [1] tests\test_sibling_modules.py:25: csm_core.persist is not importable: ModuleNotFoundError: No module named 'csm_core.persist'
+SKIPPED [1] tests\test_sibling_modules.py:25: csm_core.tokenctr_bridge is not importable: ModuleNotFoundError: No module named 'csm_core.tokenctr_bridge'
+SKIPPED [1] tests\test_sibling_modules.py:25: csm_core.cosmos_pointer is not importable: ModuleNotFoundError: No module named 'csm_core.cosmos_pointer'
+2 passed, 4 skipped in 0.18s
+```
+
+exit: 0
+
+Pass/fail: 2 passed, 4 skipped in 0.18s
