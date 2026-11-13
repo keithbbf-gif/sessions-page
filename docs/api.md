@@ -76,11 +76,11 @@ An action that is not one of the verbs below, including an empty action, raises 
 
 Most verbs return `engine._result`: `schema` is `engine.SCHEMA` (`cosmos-session-tools-result/1`), plus `verb`, `kind`, `gate`, and `legal_omitted`, plus any extra keys the callee added.
 
-Session verbs other than `find` resolve homes with `engine._homes_for`. A set `body["store"]` becomes `engine._store_homes` for that one store. Otherwise the homes are `engine.default_homes`. `find` does not call `engine._homes_for`, so a `store` field on `find` is ignored.
+Session verbs other than `find` resolve homes with `engine._homes_for`. A set `body["store"]` becomes `engine._store_homes` for that one store. Otherwise the homes are `engine.default_homes`. `find` does not call `engine._homes_for`, so a `store` field on `find` is ignored ([engine.py](../engine.py) `engine.dispatch`, `engine.find`).
 
 Where a verb takes `out` and the field is omitted, the directory is `engine.var_dir() / "exports"`. `index` is the exception: it writes `engine.var_dir() / "index.jsonl"`.
 
-Verbs that open one transcript call `engine._open_hit` first. A legal row raises `PageError("LEGAL_OMITTED", …)` and the body is not read. `find` counts legal rows and does not open them.
+Verbs that open one transcript call `engine._open_hit` first. A legal row raises `PageError("LEGAL_OMITTED", …)` and the body is not read. `find` counts legal rows and does not open them ([engine.py](../engine.py) `engine.find`, `engine.is_legal`, `engine._enrich`).
 
 ### Closed actions
 
