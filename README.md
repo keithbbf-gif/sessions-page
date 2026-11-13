@@ -1,46 +1,107 @@
 # Sessions page
 
-This directory is its own repository. COSMOS checks it out at `builds/sessions-page`.
+This folder is the sessions-page program. The commands below are what `sessions_page.py` does in this tree. Notes that already exist are linked at the end. There is no cmSessions subscription.
 
-From this repository root:
+## Launch
+
+A frozen exe with no arguments, and the `desk` command, are different starts.
+
+`sessions_page.py` calls `_launch_gui()` only when it is frozen, `main` was given no argv list, and `sys.argv` has no command. That path does not call `desk.main()`. `_launch_gui` uses `127.0.0.1`, ports 8786 through 8795. If this program is already answering `GET /api/verbs` on one of those ports, it opens that page and does not start a second server. Otherwise it serves `ui/` on the first port that binds and opens it. On Windows it tries Microsoft Edge at the usual Program Files paths, with `--app=http://127.0.0.1:<port>/`. If that Edge is not there, it opens the default browser. If every port in that range fails, it reports that Sessions could not open a local page on ports 8786–8795.
+
+The page that path opens is `ui/index.html` (CM Sessions — Full Screen UI). It is the same page as `serve`.
+
+`sessions_page.spec` builds `sessions_page.exe` with the console off. The Windows installer script copies `dist\sessions_page.exe` into `{localappdata}\Programs\cmSessions`. The desktop and Start menu shortcuts point at that exe with no arguments, so a double-click takes the path above. Setup does not start the program. `dist/`, `dist_desk/`, and `dist_new/` are gitignored. The built exe is not in git. Install notes: [install/windows/README.md](install/windows/README.md), [install/linux/README.md](install/linux/README.md), [install/macos/README.md](install/macos/README.md).
+
+The native window is a command:
+
+```
+py -3.14 sessions_page.py desk
+```
+
+That calls `desk.main()`. It does not bind a port. On Windows a second start sees the mutex `Local\cmSessionsDesk`, shows "Sessions is already open.", and does not open another window. If this Python has no tkinter, the window does not open and the program says so on stderr. `desk` takes no flags. The desk covers its stage with `ledger.mount`, which draws the Table View frame in `ledger_master.py`.
+
+`py -3.14 sessions_page.py` with no subcommand is not a start. The parser requires a command. It does not call `desk.main()` and it does not bind a port.
+
+## Port 8786
+
+`serve` is the loopback page. It binds only `127.0.0.1`. The default port is 8786. It does not try the next port. A port that is taken returns `BIND_FAILED`.
+
+```
+py -3.14 sessions_page.py serve
+py -3.14 sessions_page.py serve --port 8786
+py -3.14 sessions_page.py serve --no-browser
+```
+
+Without `--no-browser` it opens the page the same way the frozen start does. It prints a JSON line with `kind` `OK` and `url` `http://127.0.0.1:<port>/`. `POST /api/shutdown` stops that server. The UI in this tree does not call that route. Ctrl+C stops `serve` when it is running in a console.
+
+The frozen no-args start is the path that walks 8786–8795. `serve` stays on the port you named.
+
+`plugin/deck_sessions_page.js` talks only to `http://127.0.0.1:8786`. It is not the desk. See [plugin/REGISTER.md](plugin/REGISTER.md). Routes on that page are in [docs/api.md](docs/api.md).
+
+The desk does not listen. `cosmos_code_hook.py` does not open a port. COSMOS calls this engine in-process. See [docs/integration.md](docs/integration.md) and [docs/consumer/cosmos.md](docs/consumer/cosmos.md).
+
+## Where var/ lives
+
+`engine.var_dir()` is `engine.product_root() / "var"`. It creates the directory.
+
+When the program is frozen, `product_root()` is the parent of `sys.executable` after `Path.resolve()`, which follows symlinks. When it is not frozen, `product_root()` is the directory that contains `engine.py`.
+
+From source, `var/` sits beside `engine.py` in this folder. From a frozen exe, `var/` sits beside that exe, not beside the `engine.py` packed inside the bundle. `test_frozen_root.py` checks both.
+
+The Linux launcher `install/linux/cmsessions` copies the installed binary to `~/.local/share/cmsessions/sessions_page` (a real file, not a symlink) and execs that copy, because `/usr/local/lib/cmsessions` is not writable. `var/` is then `~/.local/share/cmsessions/var`. The Python code does not special-case that path. See [install/linux/README.md](install/linux/README.md).
+
+The engine writes:
+
+- `var/index.jsonl` — default output of `index`, and the saved index `desk` paints before the live walk
+- `var/exports` — default directory for `import` and `export` when `--out` is omitted
+- `var/stage/<timestamp>/` — `recover --apply` copies the original here, then replaces it from a verified sibling `.bak`. It does not rewrite a corrupt sqlite page in place.
+- `var/replaced/<timestamp>/` — an earlier `.ctr.jsonl` and `.ctr.decl.json` moved aside when the same stem is written again
+- `var/handoffs.jsonl` — one JSON line per recorded handoff
+
+`var/` is listed in `.gitignore`.
+
+## Commands
+
+From this folder:
 
 ```
 py -3.14 sessions_page.py find
-py -3.14 test_sessions_page.py
+py -3.14 sessions_page.py import --id <id> --out <dir>
+py -3.14 sessions_page.py export --id <id> --out <dir>
+py -3.14 sessions_page.py index
+py -3.14 sessions_page.py recover --target <file> [--bak <file>] [--apply]
+py -3.14 sessions_page.py resume --id <id> [--launch]
+py -3.14 sessions_page.py scan --store <path>
+py -3.14 sessions_page.py load --id <id> [--store <path>]
+py -3.14 sessions_page.py verbs
+py -3.14 sessions_page.py formats
+py -3.14 sessions_page.py desk
+py -3.14 sessions_page.py serve --port 8786
 ```
 
-Standalone tools for local harness sessions: find, import, export, index, recover, resume.
+`find` accepts `--query`, `--harness`, `--cwd`, and `--limit`. The limit defaults to 200. `load` accepts `--id` and an optional `--store`. `serve` accepts `--port` and `--no-browser`. `desk`, `verbs`, and `formats` take no flags. The same subcommands work on `sessions_page.exe`. Giving that exe no arguments is the frozen launch above, not `desk`.
 
-Harnesses: Grok, Claude Code, Codex, Cursor, Cowork catalog, OpenWork `opencode.db`, Claude Desktop, Gemini (`~/.gemini/tmp/*/chats/*.{json,jsonl}`, or `GEMINI_CLI_HOME` / `GEMINI_SESSIONS`), Hermes (`~/.hermes/state.db` via `HERMES_HOME`, plus `%LOCALAPPDATA%\\hermes\\state.db` and `profiles/*/state.db`), Cline (editor `tasks/*/api_conversation_history.json` and `~/.cline/data/sessions/*/*.messages.json`), Kilo Code (`kilocode.kilo-code` tasks and `~/.kilocode/cli/global/tasks`), Roo Code (`rooveterinaryinc.roo-cline` tasks and `~/.roo/tasks`), Pi (`~/.pi/agent/sessions`, `PI_CODING_AGENT_SESSION_DIR`), GitHub Copilot CLI (`~/.copilot/session-state/*/events.jsonl`), Continue (`~/.continue/sessions/*.json`, skipping `sessions.json`, `CONTINUE_GLOBAL_DIR`), Aider (only `AIDER_CHAT_HISTORY_FILE`), Goose (`sessions.db`, legacy `*.jsonl` only when the db is absent), Qwen (`~/.qwen/projects/*/chats/*.jsonl`), Amp (`~/.local/share/amp/threads/*.json`, `AMP_THREADS_DIR`), OpenHands (`base_state.json`), Crush (`~/.local/share/crush/projects.json`, then each project's `crush.db`), and DeepSeek `dsh` (`~/.dsh/**/session.v3.jsonl.zstd`, counted, not decompressed). Amazon Q stays uncounted unless `AMAZONQ_HISTORY` points at an export. Factory, Windsurf, and Augment have no documented transcript path, so they stay `n: null`. A missing store is `n: null`, not zero. Import of sqlite and zstd stores stays `UNMEASURED`. Legal sessions are counted and their text is not opened. `migrate` and `rebind` stay `DO_NOT_REINGEST`.
+A missing store is `n: null`, not zero. Legal sessions are counted and their text is not opened. How each harness is stored is the `formats` command, also written in [docs/consumer/formats.md](docs/consumer/formats.md). Find, load, and resume notes are in [docs/consumer/find-and-name.md](docs/consumer/find-and-name.md) and [docs/consumer/load-and-resume.md](docs/consumer/load-and-resume.md). What stays on this machine is in [docs/consumer/safety.md](docs/consumer/safety.md).
 
-```
-py -3.14 builds/sessions-page/sessions_page.py find
-py -3.14 builds/sessions-page/sessions_page.py import --id <id> --out <dir>
-py -3.14 builds/sessions-page/sessions_page.py export --id <id> --out <dir>
-py -3.14 builds/sessions-page/sessions_page.py index
-py -3.14 builds/sessions-page/sessions_page.py recover --target <file> [--bak <file>] [--apply]
-py -3.14 builds/sessions-page/sessions_page.py resume --id <id> [--launch]
-py -3.14 builds/sessions-page/sessions_page.py serve --port 8786
-```
+## Tests
 
-`serve` is loopback only. Open `http://127.0.0.1:8786/`. The first screen is a Blackline overview: system drives and the default session locations as panes, with a status light. Counts stay unmeasured until a pane is opened. Pick one, then import, export, check recovery, or resume. A full find on this machine is a few seconds. It counts every store and reads headers, not transcript bodies.
+From this folder, run `py -3.14` and the file name. The checks are the `test_*.py` scripts here, including `test_frozen_root.py` for where `var/` is created and `test_sessions_page.py` for the loopback page on a temporary port. What each file checks is in [docs/testing.md](docs/testing.md). This file does not claim a current pass count.
 
-Packaged executable (no Python needed to run it):
+## Docs in this tree
 
-```
-builds\sessions-page\dist\sessions_page.exe
-```
+- [docs/BRIEF.md](docs/BRIEF.md) — product brief
+- [docs/api.md](docs/api.md) — loopback routes
+- [docs/integration.md](docs/integration.md) — COSMOS and Cosmos Code, in-process, no sessions port
+- [docs/testing.md](docs/testing.md) — hermetic checks
+- [docs/consumer/README.md](docs/consumer/README.md) — reader notes
+- [docs/consumer/install.md](docs/consumer/install.md)
+- [docs/consumer/safety.md](docs/consumer/safety.md)
+- [docs/consumer/cosmos.md](docs/consumer/cosmos.md)
+- [docs/consumer/find-and-name.md](docs/consumer/find-and-name.md)
+- [docs/consumer/formats.md](docs/consumer/formats.md)
+- [docs/consumer/load-and-resume.md](docs/consumer/load-and-resume.md)
+- [HANDOFF.md](HANDOFF.md)
+- [JACK_ONBOARDING.md](JACK_ONBOARDING.md)
+- [plugin/REGISTER.md](plugin/REGISTER.md)
 
-Double-click the executable. It opens the Sessions page in the browser at `http://127.0.0.1:8786/` and does not open a console. Quit on the page stops it. Starting it again reopens the page that is already running. The `py -3.14 sessions_page.py …` commands above remain for scripts.
-
-Cursor includes CLI chats, agent transcripts, and read-only composer headers from the desktop state database. Gemini counts chat files under `~/.gemini/tmp`.
-
-Cosmos already routes `GET/POST /api/v1/session_tools` to `cosmos/cosmos_session_tools_kit.py`. That file calls this engine. No edit to `cosmos_service.py`, `app.js`, or `header.js`.
-
-Later UI plug: `plugin/REGISTER.md`.
-
-Recovery checks the file, then copies a verified sibling `.bak` over it after staging the original under `var/stage`. It does not rewrite a corrupt sqlite page in place.
-
-Resume prints the harness command (`grok --resume`, `claude --resume`, `codex resume`, `agent --resume`, `pi --session`, `hermes --resume`, `cline --id` for a `*.messages.json` session, `goose session --resume --session-id`, `qwen --resume`, `copilot --resume=<id>`, `crush --session`). `--launch` starts that command. It does not pass `-p`. OpenWork and Cowork return the session id to focus and do not spawn `OpenWork.exe`. Factory's `droid --resume` flag is documented, and its session directory is not, so those rows are not listed.
-
-Tests: `py -3.14 builds/sessions-page/test_sessions_page.py`
+The consumer notes and [HANDOFF.md](HANDOFF.md) still describe the desk as the packaged start. The launch section above is what `sessions_page.py` in this tree does.

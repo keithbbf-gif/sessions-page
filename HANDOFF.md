@@ -1,6 +1,8 @@
-# Handoff — cmSessions — 2026-11-07
+# Handoff — cmSessions — 2026-11-12
 
 Operational. For the next session orchestrator. Do not treat this as a design essay.
+
+Launch behavior below was read from `sessions_page.py` on 2026-11-12. This handoff did not run tests and does not claim any test passed. Counts and exe byte sizes later in this file are older notes. They were not rechecked.
 
 ## Where the work is
 
@@ -23,13 +25,27 @@ py -3.14 -m PyInstaller --noconfirm --distpath dist_desk sessions_page.spec
 
 from the live folder. If `CM Sessions.exe` is open, the copy fails. Close it first, then copy `dist_desk\sessions_page.exe` onto the desktop name.
 
-Launch is the native window. `sessions_page.py` with no arguments calls `desk.main()`. It must not open a browser and must not bind a port. `serve` still exists and still binds `127.0.0.1:8786`. Do not point the desktop shortcut at `serve`.
+## Current launch behavior
+
+Read from `V:\A\Ai\sessions-page-teams\docs\sessions_page.py` (`main`, `_launch_gui`, `_serve`, `_open_page`). A grep of `V:\a\ai\COSMOS\builds\sessions-page\sessions_page.py` shows the same frozen no-args branch and `_launch_gui`. This is not a full diff of the two trees.
+
+The Tk desk is not the only window. Code serves `ui/index.html`. The frozen executable with no arguments does not call `desk.main()`.
+
+- Frozen, no arguments (`sys.frozen`, `len(sys.argv) <= 1`, and `main()` called with `argv is None`): `_launch_gui()`. That binds `127.0.0.1` and serves `ui/index.html` (document title "CM Sessions — Full Screen UI"), plus `ui/app.js`, `ui/app.css`, `ui/index_classic.html`, and the three `cmsessions_*.png` files. `sessions_page.spec` sets `console=False` and packs those `ui` files into the exe. A frozen build reads UI from `_MEIPASS`, not from a later edit of the source `ui` folder.
+- Ports: 8786 through 8795. If `GET /api/verbs` on a port already lists `find` and `resume`, the new process only opens that page and does not start a second server. A failed bind tries the next port. If every port fails, a message box says `Sessions could not open a local page on ports 8786–8795.`
+- The page opens in Microsoft Edge as `msedge.exe --app=http://127.0.0.1:<port>/` when Edge is in Program Files or Program Files (x86). Otherwise it uses `webbrowser.open`. `POST /api/shutdown` stops the loopback server.
+- A daemon thread calls `engine.find(limit=250)` unless `CMSESSIONS_NO_PREWARM` or `CMSESSIONS_TEST_MODE` is set.
+- `py -3.14 sessions_page.py` with no subcommand does not open a window and does not bind a port. The subcommand is required, so argparse exits with an error. That path is not `desk.main()`.
+- `serve` is the same loopback page on one port (default 8786). It opens the page unless `--no-browser` is passed. It does not scan 8786–8795. Unfrozen `serve` reads `ui/` from the source tree on each request, so a browser reload sees HTML, CSS, and JS edits.
+- `desk` is the native Tkinter ledger. `desk.main()` does not bind a socket. A second desk sees `Local\cmSessionsDesk` and does not open another Tk window. Use `desk` only when that ledger is the window you mean.
+
+The no-args exe is the Full Screen page. Do not describe the Tk desk as the desktop launch, and do not aim the desktop shortcut at a rule that forbids a browser.
 
 ## What this product is
 
 One engine, three shells, in this order:
 
-1. Standalone app first. Native window. No Cosmos required.
+1. Standalone app first. The no-args exe is the Full Screen page in an Edge app window, or the default browser if Edge is absent. `desk` is the Tk ledger. Neither requires Cosmos.
 2. The same engine inside COSMOS, in-process, through `V:\a\ai\COSMOS\cosmos\cosmos_session_tools_kit.py`. Do not edit `cosmos_service.py`, `app.js`, or `header.js`.
 3. A plugin for Cosmos Code, through `cosmos_code_hook.py`. Do not copy the engine into `E:\Cosmos_code_repo`. The applied tree `V:\a\ai\COSMOS\cosmos_code` has no `plugins.py`. The snapshot descriptor with an entrypoint is `E:\Cosmos_code_repo\2026-09-30_v2_product_engine\product_cosmos_code\plugins.py`.
 
@@ -68,7 +84,9 @@ First open: `desk.py` paints a saved index off the UI thread, then `find(enrich=
 
 `engine.installed_launchers()` is the list of binaries found on this machine. A harness that is not installed must be hidden, not shown as a dead button. That hide is not finished in the ledger header.
 
-## Tests last known green
+## Tests previously recorded (not re-run)
+
+These counts are notes from 2026-11-07. This handoff did not run them and does not claim they pass.
 
 From `V:\a\ai\COSMOS\builds\sessions-page`, on 2026-11-07, before the last layout rewrite:
 
@@ -82,7 +100,7 @@ Re-run `test_desk.py` and `test_sessions_page.py` after the next layout edit. Do
 
 ## Do not
 
-- Do not open the product in a browser or bind a port for the desktop app.
+- Do not say the Tk desk is the only window. The no-args exe serves `ui/index.html` on `127.0.0.1`. `desk` is the Tk path, and that path does not bind a port.
 - Do not make Table, Session, Calendar, and Projects into separate pages or a left-hand app nav.
 - Do not stack all four drawings on one screen at once.
 - Do not fork the engine per shell.
@@ -95,7 +113,9 @@ Re-run `test_desk.py` and `test_sessions_page.py` after the next layout edit. Do
 
 ## Next session, in order
 
-1. Make the running window match the landscape ledger drawing. Header and six columns and the sun, as above. Check it by opening the exe, not by describing the code.
+The list below is the 2026-11-07 ledger plan. Opening the exe now shows `ui/index.html`, not the Tk desk. Use `sessions_page.py desk` when the check is the Tk ledger.
+
+1. Make the running window match the landscape ledger drawing. Header and six columns and the sun, as above. Check it by opening the window you mean, not by describing the code.
 2. Put the Table View drawing inside the session-title column only: column chips, More, search, print, topic list. Do not let that drawing become the window.
 3. A clicked row opens the single-session drawing in that same center column: date, start, end, size, tokens, path, keywords, Resume, the harness, the model, session text, session preview. Resume launches the source harness. Hand off and cross-check stay separate. Nothing launches by itself.
 4. Group by project shows the project cards in that center column. Calendar shows in that center column. RAN IN, time, size, and daily summaries stay visible.
