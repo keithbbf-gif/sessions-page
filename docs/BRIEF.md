@@ -17,15 +17,26 @@ The plugin shell and the standalone shell share indexing, search, filters, the t
 
 Do not make the standalone app a thin launcher for Cosmos. A person who never installs Cosmos must still get the full session product. Do not make the plugin a second, lesser copy. If Cosmos is installed, cmSessions uses it. If it is not, cmSessions still works.
 
-## Stack decision (2026-11-07)
+## Stack decision (2026-11-07, launch corrected 2026-11-12)
 
 The product ships in this order. One engine. Do not fork it.
 
-1. Standalone app first. Native window. `CM Sessions.exe`. No browser and no port.
+1. Standalone app first. `CM Sessions.exe`. See current launch below. The 2026-11-07 line "native window, no browser and no port" is not what `sessions_page.py` does now.
 2. The same engine is an integral part of COSMOS, called in-process through `cosmos_session_tools_kit.py`.
 3. The same engine is a plugin for Cosmos Code, through `cosmos_code_hook.py`.
 
-cDeck is a Tauri host around HTML. That is the host for the plugin pane later. It is not a reason to make the standalone app a web page.
+cDeck is a Tauri host around HTML. That is the host for the plugin pane later. It is not a reason to drop the standalone app. The standalone no-args exe already serves its own page.
+
+## Current launch behavior (code, 2026-11-12)
+
+Read from `V:\A\Ai\sessions-page-teams\docs\sessions_page.py`. This brief does not claim tests passed.
+
+The Tk desk is not the only window. `sessions_page.py` serves `ui/index.html`.
+
+- Frozen exe, no arguments: `_launch_gui()`, not `desk.main()` ([sessions_page.py](../sessions_page.py) `sessions_page.main`, `sessions_page._launch_gui`). Binds `127.0.0.1`, serves `ui/index.html` ("CM Sessions — Full Screen UI"), `ui/app.js`, and `ui/app.css` ([sessions_page.py](../sessions_page.py) `sessions_page._serve`). Tries ports 8786–8795 ([sessions_page.py](../sessions_page.py) `sessions_page._launch_gui`). An existing page (`/api/verbs` includes `find` and `resume`) is focused instead of started twice ([sessions_page.py](../sessions_page.py) `sessions_page._ours`, `sessions_page._open_page`). Windows opens Edge with `--app=` when `msedge.exe` is installed; otherwise the default browser ([sessions_page.py](../sessions_page.py) `sessions_page._open_page`). `POST /api/shutdown` stops it ([sessions_page.py](../sessions_page.py) `sessions_page._serve`). No console (`sessions_page.spec` has `console=False`).
+- `py -3.14 sessions_page.py` with no subcommand does not launch. The subcommand is required ([sessions_page.py](../sessions_page.py) `sessions_page.main`).
+- `serve` (default port 8786) is that same page. `--no-browser` skips opening it. One port, no scan ([sessions_page.py](../sessions_page.py) `sessions_page.main`, `sessions_page._serve`).
+- `desk` opens the Tkinter ledger and does not bind a socket. A second desk stops on `Local\cmSessionsDesk` ([desk.py](../desk.py) `desk.instance_name`, `desk.claim_instance`, `desk.main`). That is a separate command, not the no-args exe.
 
 ## What you are not building
 

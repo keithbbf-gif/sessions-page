@@ -26,8 +26,8 @@ The next step is a button that calls `kit.run`. That button is not in this build
 
 `E:\Cosmos_code_repo` is a pile of dated snapshots, not the running package. Do not copy the engine into `E:\Cosmos_code_repo`.
 
-The snapshot descriptor in `E:\Cosmos_code_repo\2026-09-30_v2_product_engine\product_cosmos_code\plugins.py` now has the entrypoint `V:\a\ai\COSMOS\builds\sessions-page\cosmos_code_hook.py:descriptor`. The builtin named `sessions` stays registered. `via` is in-process. `port` is null. `window` is `desk`. `writes_live` stays false. The verbs are find, load, resume, and formats. Scope stays `core/sessions`. The hook does not open a port, it does not start a process, and it does not write `live\`.
+The snapshot descriptor in `E:\Cosmos_code_repo\2026-09-30_v2_product_engine\product_cosmos_code\plugins.py` now has the entrypoint `V:\a\ai\COSMOS\builds\sessions-page\cosmos_code_hook.py:descriptor`. The builtin named `sessions` stays registered. `via` is in-process. `port` is null. `window` is `desk`. `writes_live` stays false. The verbs are find, load, resume, and formats ([cosmos_code_hook.py](../cosmos_code_hook.py) `cosmos_code_hook.descriptor`). Scope stays `core/sessions`. The hook does not open a port, it does not start a process, and it does not write `live\`.
 
 `V:\a\ai\COSMOS\cosmos_code` still has no `plugins.py`, so the running Cosmos Code package does not load this descriptor until that snapshot is the package.
 
-The deck script `plugin/deck_sessions_page.js` is only the old page. It still talks to `127.0.0.1:8786` when someone started `serve`. The installed app is the desk window and does not need that port.
+The deck script `plugin/deck_sessions_page.js` is only the old page. It still talks to `127.0.0.1:8786` when someone started `serve` ([plugin/deck_sessions_page.js](../plugin/deck_sessions_page.js) `HOST`; [sessions_page.py](../sessions_page.py) `sessions_page._serve`, `sessions_page.main`). The installed app is the desk window and does not need that port.
