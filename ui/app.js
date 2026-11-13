@@ -18,7 +18,8 @@
     group: "flat",
     project: null,
     findGen: 0,
-    selectGen: 0
+    selectGen: 0,
+    stripOk: ""
   };
 
   function $(id) { return document.getElementById(id); }
@@ -203,8 +204,32 @@
       if (rec.kind === "OK") return "Restored from the backup.";
       if (rec.kind === "NO_BAK") return "No backup was found beside the file.";
       if (rec.kind === "ALREADY_OK") return "File checks out. Nothing was changed.";
+      if (rec.kind === "DRY_RUN") return "A backup is ready. Nothing was copied.";
       if (rec.kind === "BUSY") return "The file is in use. Nothing was changed.";
       return rec.kind || "Restore finished.";
+    }
+    if (rec.verb === "preview") {
+      var shown = gate.shown;
+      var nTurns = gate.n_turns;
+      if (typeof nTurns === "number") return "Showing " + shown + " of " + nTurns + " turns.";
+      return "First " + shown + " turns.";
+    }
+    if (rec.verb === "index") {
+      var indexed = gate.n;
+      var indexOut = gate.out || "";
+      if (typeof indexed !== "number") return rec.kind || "Index";
+      return indexOut ? ("Index of " + indexed + " — " + indexOut) : ("Index of " + indexed);
+    }
+    if (rec.verb === "formats") {
+      var rows = gate.formats || [];
+      return rows.length + " formats.";
+    }
+    if (rec.verb === "strip_dry") {
+      return "Strip would keep " + gate.kept + " turns and drop " + gate.dropped_markers + ". Nothing was written.";
+    }
+    if (rec.verb === "strip") {
+      var stripPath = rec.written && rec.written.jsonl;
+      return "Stripped copy written. Original unchanged." + (stripPath ? " " + stripPath : "");
     }
     return rec.kind || "Done.";
   }
@@ -229,11 +254,14 @@
 
   function paintActions(hit) {
     var on = !!(hit && !hit.legal);
-    ["continue", "handoff", "copy", "export-md", "export-json", "import", "anonymize", "restore"].forEach(function (id) {
+    ["continue", "handoff", "copy", "export-md", "export-json", "import", "anonymize", "restore", "preview-btn", "recover-btn", "strip-dry-btn", "strip-btn"].forEach(function (id) {
       var el = $(id);
       if (el) el.disabled = !on;
     });
-    if (on && !hit.path) $("restore").disabled = true;
+    if (on && hit && !hit.path) {
+      if ($("restore")) $("restore").disabled = true;
+      if ($("recover-btn")) $("recover-btn").disabled = true;
+    }
   }
 
   function paintDetail(resetArgv) {
@@ -744,8 +772,122 @@
   function onRestore() {
     var hit = state.selected;
     if (!hit || hit.legal || !hit.path) return;
-    if (!window.confirm("Replace this session file with the newest good backup beside it?")) return;
+    if (!window.confirm("Replace this file with the backup beside it?")) return;
     act("crash-recover", { target: hit.path, path: hit.path, apply: true });
+  }
+
+  function onPreview() {
+    var hit = state.selected;
+    var gen;
+    if (!hit) {
+      say("Select a session first.", "warn");
+      return;
+    }
+    if (hit.legal) {
+      paintPreview(null, "Legal session stays closed.");
+      say("Legal session stays closed.", "bad");
+      return;
+    }
+    gen = state.selectGen;
+    paintPreview(null, "Reading…");
+    post({ action: "preview", id: hit.id, turns: 6, chars: 400 }).then(function (rec) {
+      if (gen !== state.selectGen || !state.selected || state.selected.id !== hit.id) return;
+      if (!rec || rec.error) {
+        paintPreview(null, sentence(rec));
+        say(sentence(rec), "bad");
+        return;
+      }
+      state.turns = (rec.gate && rec.gate.turns) || [];
+      paintPreview(state.turns, state.turns.length ? "" : "No dialogue in this preview.");
+      say(sentence(rec), toneOf(rec));
+    }).catch(function (err) {
+      if (gen !== state.selectGen) return;
+      say(String(err && err.message || err), "bad");
+    });
+  }
+
+  function onIndex() {
+    say("Indexing…");
+    post({ action: "index" }).then(function (rec) {
+      if (rec && rec.gate && typeof rec.gate.n === "number") state.indexed = rec.gate.n;
+      say(sentence(rec), toneOf(rec));
+      paintStatus();
+    }).catch(function (err) {
+      say(String(err && err.message || err), "bad");
+    });
+  }
+
+  function onFormats() {
+    post({ action: "formats" }).then(function (rec) {
+      var rows = (rec && rec.gate && rec.gate.formats) || [];
+      var lines = rows.map(function (row) {
+        return (row.harness || "") + "  " + (row.load || "") + "  " + (row.resume || "");
+      });
+      say(sentence(rec), toneOf(rec));
+      var box = $("preview");
+      if (box) box.textContent = lines.join("\n") || sentence(rec);
+    }).catch(function (err) {
+      say(String(err && err.message || err), "bad");
+    });
+  }
+
+  function onRecover() {
+    var hit = state.selected;
+    if (!hit || hit.legal) return;
+    if (!hit.path) {
+      say("This session has no path.", "warn");
+      return;
+    }
+    act("recover", { target: hit.path, path: hit.path, apply: false });
+  }
+
+  function onStripDry() {
+    var hit = state.selected;
+    var id;
+    var gen;
+    if (!hit || hit.legal) return;
+    id = hit.id;
+    gen = state.selectGen;
+    post({ action: "strip_dry", id: id }).then(function (rec) {
+      if (gen !== state.selectGen || !state.selected || state.selected.id !== id) return;
+      if (rec && rec.kind === "OK") state.stripOk = id;
+      else if (state.stripOk === id) state.stripOk = "";
+      say(sentence(rec), toneOf(rec));
+    }).catch(function (err) {
+      if (gen !== state.selectGen) return;
+      say(String(err && err.message || err), "bad");
+    });
+  }
+
+  function onStrip() {
+    var hit = state.selected;
+    if (!hit || hit.legal) return;
+    if (state.stripOk !== hit.id) {
+      say("Check strip has to succeed first.", "warn");
+      return;
+    }
+    act("strip");
+  }
+
+  function ensureVerbButtons() {
+    var host = document.querySelector(".actions");
+    if (!host || host.getAttribute("data-verbs") === "1") return;
+    host.setAttribute("data-verbs", "1");
+    [
+      ["preview-btn", "Preview", onPreview],
+      ["index-btn", "Index", onIndex],
+      ["formats-btn", "Formats", onFormats],
+      ["recover-btn", "Check recovery", onRecover],
+      ["strip-dry-btn", "Check strip", onStripDry],
+      ["strip-btn", "Write strip", onStrip]
+    ].forEach(function (spec) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.id = spec[0];
+      btn.textContent = spec[1];
+      btn.addEventListener("click", spec[2]);
+      host.appendChild(btn);
+    });
   }
 
   function paintCards(rows) {
@@ -870,6 +1012,7 @@
   }
 
   function bind() {
+    ensureVerbButtons();
     $("search-form").addEventListener("submit", function (ev) {
       ev.preventDefault();
       find();
