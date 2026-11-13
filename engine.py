@@ -228,6 +228,62 @@ def _is_real_file(path: Path) -> bool:
         return False
 
 
+def _is_windows_tree(path: str | Path) -> bool:
+    """C:\\Windows and anything under it. Lexical only; does not list the tree."""
+    try:
+        raw = os.path.abspath(os.fspath(path))
+    except (OSError, ValueError):
+        raw = os.fspath(path)
+    if raw.startswith("\\\\?\\"):
+        raw = raw[4:]
+        if raw[:4].upper() == "UNC\\":
+            raw = "\\\\" + raw[4:]
+    norm = os.path.normcase(os.path.normpath(raw))
+    win = os.path.normcase(os.path.normpath(r"C:\Windows"))
+    return norm == win or norm.startswith(win + os.sep)
+
+
+def _reparse_point(path: str | Path) -> bool:
+    try:
+        attrs = getattr(os.lstat(path), "st_file_attributes", 0) or 0
+    except OSError:
+        return False
+    return bool(attrs & 0x400)
+
+
+def _blocked_tree(path: str | Path) -> bool:
+    """Refuse C:\\Windows, including a junction whose target is that tree."""
+    if _is_windows_tree(path):
+        return True
+    if not _reparse_point(path):
+        return False
+    try:
+        resolved = Path(path).resolve()
+    except OSError:
+        return False
+    return _is_windows_tree(resolved)
+
+
+def _prune_dirs(dirpath: str, dirnames: list[str], skip: tuple[str, ...] = ()) -> None:
+    kept = []
+    for name in dirnames:
+        if name in skip:
+            continue
+        if _blocked_tree(Path(dirpath) / name):
+            continue
+        kept.append(name)
+    dirnames[:] = kept
+
+
+def _path_here(path: Path | None) -> bool:
+    if path is None:
+        return False
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
 def _same_path(path: Path, peers: list[Path]) -> bool:
     try:
         resolved = path.resolve()
@@ -646,7 +702,11 @@ def _volume_row_timed(kernel, root: str, letter: str, kind: str, wait: float = 0
 
 
 def list_drives() -> list[dict]:
-    """Volume letters and labels only. Does not walk the files on the drive."""
+    """Volume letters and labels only. Does not walk the files on the drive.
+
+    Drive roots are queried. C:\\Windows is not a drive root and is not listed
+    or walked from here.
+    """
     if os.name != "nt":
         root = Path("/")
         return [{"id": "/", "path": "/", "label": "", "kind": "fixed", "fs": "",
@@ -672,6 +732,10 @@ def list_drives() -> list[dict]:
         roots = [part for part in text.split("\x00") if part]
         rows = []
         for root in roots:
+            if _is_windows_tree(root):
+                continue
+            if len(root) < 3 or root[1] != ":":
+                continue
             kind_n = int(kernel.GetDriveTypeW(root))
             kind = _DRIVE_KIND.get(kind_n, "unknown")
             letter = root[:2].upper()
@@ -712,16 +776,28 @@ def list_drives() -> list[dict]:
 
 
 def places(homes: dict | None = None) -> dict:
-    """Drives first, then each default location. Counts stay null until find."""
+    """Drives first, then each default location. Counts stay null until find.
+
+    A missing store stays absent with n null. A store rooted at C:\\Windows is
+    not a place we walk. This does not read transcript bodies.
+    """
     homes = homes if homes is not None else default_homes()
     drives = list_drives()
     rows = []
     for row in home_status(homes):
         raw = homes.get(row["harness"])
-        candidate = str(raw) if raw else None
+        path = raw if isinstance(raw, Path) else None
+        if path is not None and _blocked_tree(path):
+            present = False
+        else:
+            present = _listed_store(row["harness"], path)
         item = dict(row)
-        item["candidate"] = candidate
-        item["drive"] = _drive_letter(row.get("path") or candidate)
+        item["present"] = present
+        item["n"] = None
+        item["status"] = "PRESENT" if present else "ABSENT"
+        item["path"] = str(path) if path is not None and present else None
+        item["candidate"] = str(path) if path is not None else None
+        item["drive"] = _drive_letter(item.get("path") or item["candidate"])
         rows.append(item)
     return {"drives": drives, "homes": rows}
 
@@ -900,6 +976,88 @@ def _sniff(path: Path, n: int = 1024) -> tuple[str, str]:
     return cwd, title
 
 
+def _json_string_at(text: str, i: int) -> tuple[str, int]:
+    if i >= len(text) or text[i] != '"':
+        return "", i
+    i += 1
+    chars: list[str] = []
+    while i < len(text):
+        ch = text[i]
+        if ch == '"':
+            return "".join(chars), i + 1
+        if ch == "\\" and i + 1 < len(text):
+            nxt = text[i + 1]
+            if nxt == "u" and i + 6 <= len(text):
+                try:
+                    chars.append(chr(int(text[i + 2:i + 6], 16)))
+                except ValueError:
+                    chars.append(nxt)
+                i += 6
+                continue
+            chars.append({
+                "n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f",
+                '"': '"', "\\": "\\", "/": "/",
+            }.get(nxt, nxt))
+            i += 2
+            continue
+        chars.append(ch)
+        i += 1
+    return "".join(chars), i
+
+
+_BODY_KEYS = frozenset({"history", "messages", "conversation", "events", "turns"})
+
+
+def _header_fields(path: Path, keys: tuple[str, ...]) -> dict[str, str]:
+    """Root strings in the header window. Stops before a transcript value."""
+    if is_legal(str(path)) or _blocked_tree(path):
+        return {}
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(HEAD_BYTES)
+    except OSError:
+        return {}
+    text = raw.decode("utf-8", errors="replace")
+    want = set(keys)
+    found: dict[str, str] = {}
+    i = 0
+    n = len(text)
+    while i < n and text[i].isspace():
+        i += 1
+    if i >= n or text[i] != "{":
+        return found
+    i += 1
+    while i < n and len(found) < len(want):
+        while i < n and text[i] in " \t\r\n,":
+            i += 1
+        if i >= n or text[i] == "}":
+            break
+        if text[i] != '"':
+            break
+        key, i = _json_string_at(text, i)
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n or text[i] != ":":
+            break
+        i += 1
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n:
+            break
+        if key in _BODY_KEYS:
+            break
+        if text[i] == '"':
+            val, i = _json_string_at(text, i)
+            if key in want and key not in found:
+                found[key] = val
+            continue
+        if text[i] in "{[":
+            break
+        while i < n and text[i] not in ",}":
+            i += 1
+    return found
+
+
 def _claude_meta(path: Path) -> tuple[str, str]:
     cwd, title = _sniff(path, 2048)
     ai = ""
@@ -924,12 +1082,14 @@ def _claude_meta(path: Path) -> tuple[str, str]:
 
 
 def _enum_grok(root: Path) -> list[dict]:
-    if not root.is_dir():
+    if not root.is_dir() or _blocked_tree(root):
         return []
     hits = []
     stack = [root]
     while stack:
         current = stack.pop()
+        if _blocked_tree(current):
+            continue
         try:
             scan = os.scandir(current)
         except OSError:
@@ -938,8 +1098,9 @@ def _enum_grok(root: Path) -> list[dict]:
             for entry in scan:
                 try:
                     if entry.is_dir(follow_symlinks=False):
-                        if entry.name not in ("node_modules", ".git"):
-                            stack.append(Path(entry.path))
+                        child = Path(entry.path)
+                        if entry.name not in ("node_modules", ".git") and not _blocked_tree(child):
+                            stack.append(child)
                         continue
                     if entry.name != "summary.json":
                         continue
@@ -951,7 +1112,16 @@ def _enum_grok(root: Path) -> list[dict]:
                     st = hist.stat()
                 except OSError:
                     continue
-                if not hist.is_file():
+                if not hist.is_file() or hist.is_symlink():
+                    continue
+                if _is_windows_tree(hist):
+                    continue
+                # The jsonl is the body. A legal path is counted from the stat only.
+                if is_legal(str(hist)) or is_legal(str(folder)) or is_legal(str(entry.path)):
+                    hits.append(_hit(
+                        harness="grok", vendor_id=folder.name, path=hist,
+                        updated=st.st_mtime, nbytes=st.st_size,
+                    ))
                     continue
                 try:
                     info = json.loads(Path(entry.path).read_text(encoding="utf-8"))
@@ -980,6 +1150,8 @@ def _claude_project_cwd(name: str) -> str:
 
 def _consume_claude_dir(project: Path, hits: list[dict]) -> None:
     """List session files. Do not open each transcript. Legal is the folder name."""
+    if _blocked_tree(project):
+        return
     decoded = _claude_project_cwd(project.name)
     folder_legal = is_legal(str(project), "", decoded, "")
     try:
@@ -1008,7 +1180,7 @@ def _consume_claude_dir(project: Path, hits: list[dict]) -> None:
 
 
 def _enum_claude(root: Path) -> list[dict]:
-    if not root.is_dir():
+    if not root.is_dir() or _blocked_tree(root):
         return []
     hits: list[dict] = []
     _consume_claude_dir(root, hits)
@@ -1024,22 +1196,34 @@ def _enum_claude(root: Path) -> list[dict]:
 
 
 def _enum_codex_files(root: Path) -> list[dict]:
+    """Rollout names and stats only. Titles wait for enrich so bodies stay closed."""
+    if _blocked_tree(root):
+        return []
     hits = []
     try:
-        paths = root.rglob("rollout-*.jsonl")
+        walker = os.walk(root)
     except OSError:
         return []
-    for path in paths:
-        if "archived" in {p.lower() for p in path.parts}:
+    for dirpath, dirnames, filenames in walker:
+        _prune_dirs(dirpath, dirnames)
+        if "archived" in {part.lower() for part in Path(dirpath).parts}:
+            dirnames[:] = []
             continue
-        match = _ROLLOUT.match(path.name)
-        if not match:
-            continue
-        cwd, title = _sniff(path)
-        hits.append(_hit(
-            harness="codex", vendor_id=match.group(1), path=path, cwd=cwd, title=title,
-            updated=_mtime(path), nbytes=path.stat().st_size,
-        ))
+        for name in filenames:
+            match = _ROLLOUT.match(name)
+            if not match:
+                continue
+            path = Path(dirpath) / name
+            if _is_windows_tree(path) or path.is_symlink():
+                continue
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            hits.append(_hit(
+                harness="codex", vendor_id=match.group(1), path=path,
+                updated=st.st_mtime, nbytes=st.st_size,
+            ))
     return hits
 
 
@@ -1050,24 +1234,26 @@ def _codex_rollout_index(root: Path) -> dict[str, Path]:
     """
     sessions = root / "sessions"
     try:
-        if not sessions.is_dir():
+        if not sessions.is_dir() or _blocked_tree(sessions):
             return {}
     except OSError:
         return {}
     found: dict[str, Path] = {}
-    patterns = ("rollout-*.jsonl", "rollout-*.jsonl.zst")
-    for pattern in patterns:
-        try:
-            paths = sessions.rglob(pattern)
-        except OSError:
+    try:
+        walker = os.walk(sessions)
+    except OSError:
+        return {}
+    for dirpath, dirnames, filenames in walker:
+        _prune_dirs(dirpath, dirnames)
+        if "archived" in {part.lower() for part in Path(dirpath).parts}:
+            dirnames[:] = []
             continue
-        for path in paths:
-            if "archived" in {part.lower() for part in path.parts}:
+        for name in filenames:
+            path = Path(dirpath) / name
+            if _is_windows_tree(path):
                 continue
-            name = path.name
-            if name.lower().endswith(".jsonl.zst"):
-                name = name[:-4]
-            match = _ROLLOUT.match(name)
+            leaf = name[:-4] if name.lower().endswith(".jsonl.zst") else name
+            match = _ROLLOUT.match(leaf)
             if not match:
                 continue
             # A plain jsonl wins over the compressed sibling.
@@ -1075,7 +1261,7 @@ def _codex_rollout_index(root: Path) -> dict[str, Path]:
             current = found.get(key)
             if current is None:
                 found[key] = path
-            elif current.name.lower().endswith(".jsonl.zst") and not path.name.lower().endswith(".jsonl.zst"):
+            elif current.name.lower().endswith(".jsonl.zst") and not name.lower().endswith(".jsonl.zst"):
                 found[key] = path
     return found
 
@@ -1141,16 +1327,19 @@ def _enum_codex(root: Path) -> list[dict]:
     for key, path in files.items():
         if key in seen:
             continue
-        match = _ROLLOUT.match(path.name)
+        leaf = path.name[:-4] if path.name.lower().endswith(".jsonl.zst") else path.name
+        match = _ROLLOUT.match(leaf)
         if not match:
             continue
-        cwd, title = _sniff(path)
+        if _is_windows_tree(path):
+            continue
         try:
             size = path.stat().st_size
         except OSError:
             continue
+        # Name and size only. A jsonl title is an enrich read, and zst stays closed.
         hits.append(_hit(
-            harness="codex", vendor_id=match.group(1), path=path, cwd=cwd, title=title,
+            harness="codex", vendor_id=match.group(1), path=path,
             updated=_mtime(path), nbytes=size,
         ))
         seen.add(key)
@@ -1191,57 +1380,78 @@ def _enum_codex_db(db: Path) -> list[dict]:
 
 
 def _enum_cursor(root: Path) -> list[dict]:
-    if not root.is_dir():
+    if not root.is_dir() or _blocked_tree(root):
         return []
     hits = []
     chats = root / "chats"
-    if chats.is_dir():
+    if chats.is_dir() and not _blocked_tree(chats):
         try:
             workspaces = list(chats.iterdir())
         except OSError:
             workspaces = []
         for workspace in workspaces:
-            if not workspace.is_dir():
+            if not workspace.is_dir() or _blocked_tree(workspace):
                 continue
             try:
                 children = list(workspace.iterdir())
             except OSError:
                 continue
             for child in children:
-                if not child.is_dir() or not _UUID.fullmatch(child.name):
+                if not child.is_dir() or _blocked_tree(child) or not _UUID.fullmatch(child.name):
                     continue
                 meta_path = child / "meta.json"
                 store = child / "store.db"
                 path = meta_path if meta_path.is_file() else store
-                if not path.is_file():
+                if not path.is_file() or _is_windows_tree(path):
                     continue
                 cwd, title = "", ""
-                if meta_path.is_file():
+                # meta.json is the header. The transcript jsonl stays closed until enrich.
+                if meta_path.is_file() and not is_legal(str(meta_path)) and not is_legal(str(child)):
                     try:
                         meta = json.loads(meta_path.read_text(encoding="utf-8"))
                     except (OSError, ValueError):
                         meta = {}
-                    cwd = str(meta.get("cwd") or meta.get("workspacePath") or "")
-                    title = str(meta.get("title") or meta.get("name") or "")
+                    if isinstance(meta, dict):
+                        cwd = str(meta.get("cwd") or meta.get("workspacePath") or "")
+                        title = str(meta.get("title") or meta.get("name") or "")
                 hits.append(_hit(
                     harness="cursor", vendor_id=child.name, path=path, cwd=cwd, title=title,
                     updated=_mtime(path),
                 ))
     projects = root / "projects"
-    if projects.is_dir():
-        try:
-            transcripts = projects.glob("*/agent-transcripts/*/*.jsonl")
-        except OSError:
-            transcripts = []
+    if projects.is_dir() and not _blocked_tree(projects):
         seen = {h["vendor_id"] for h in hits}
-        for path in transcripts:
-            if not _UUID.fullmatch(path.stem) or path.stem in seen:
+        try:
+            workspaces = [p for p in projects.iterdir() if p.is_dir() and not _blocked_tree(p)]
+        except OSError:
+            workspaces = []
+        for workspace in workspaces:
+            agent = workspace / "agent-transcripts"
+            if not agent.is_dir() or _blocked_tree(agent):
                 continue
-            cwd, title = _claude_meta(path)
-            hits.append(_hit(
-                harness="cursor", vendor_id=path.stem, path=path, cwd=cwd, title=title,
-                updated=_mtime(path), nbytes=path.stat().st_size,
-            ))
+            try:
+                folders = [p for p in agent.iterdir() if p.is_dir() and not _blocked_tree(p)]
+            except OSError:
+                continue
+            for folder in folders:
+                try:
+                    children = list(folder.iterdir())
+                except OSError:
+                    continue
+                for path in children:
+                    if path.suffix.lower() != ".jsonl" or not path.is_file() or path.is_symlink():
+                        continue
+                    if _is_windows_tree(path) or not _UUID.fullmatch(path.stem) or path.stem in seen:
+                        continue
+                    try:
+                        st = path.stat()
+                    except OSError:
+                        continue
+                    hits.append(_hit(
+                        harness="cursor", vendor_id=path.stem, path=path,
+                        updated=st.st_mtime, nbytes=st.st_size,
+                    ))
+                    seen.add(path.stem)
     real = Path(os.environ["CURSOR_HOME"]) if os.environ.get("CURSOR_HOME") else Path.home() / ".cursor"
     try:
         same = root.resolve() == real.resolve()
@@ -1396,22 +1606,30 @@ def _enum_openwork(store: Path) -> list[dict]:
 
 
 def _enum_loose_jsonl(harness: str, root: Path | None) -> list[dict]:
-    if root is None or not root.is_dir():
+    """File names and stats. The jsonl body is an enrich read, not a list read."""
+    if root is None or not root.is_dir() or _blocked_tree(root):
         return []
     hits = []
     try:
-        files = list(root.rglob("*.jsonl"))
+        walker = os.walk(root)
     except OSError:
         return []
-    for path in files:
-        if path.is_symlink():
-            continue
-        vid = path.stem
-        cwd, title = _sniff(path)
-        hits.append(_hit(
-            harness=harness, vendor_id=vid, path=path, cwd=cwd, title=title,
-            updated=_mtime(path), nbytes=path.stat().st_size,
-        ))
+    for dirpath, dirnames, filenames in walker:
+        _prune_dirs(dirpath, dirnames)
+        for name in filenames:
+            if not name.lower().endswith(".jsonl"):
+                continue
+            path = Path(dirpath) / name
+            if path.is_symlink() or _is_windows_tree(path):
+                continue
+            try:
+                st = path.stat()
+            except OSError:
+                continue
+            hits.append(_hit(
+                harness=harness, vendor_id=path.stem, path=path,
+                updated=st.st_mtime, nbytes=st.st_size,
+            ))
     return hits
 
 
@@ -1538,13 +1756,21 @@ def _hermes_state_files(path: Path) -> list[Path]:
 
 
 def _enum_hermes_home(path: Path) -> list[dict]:
+    if _blocked_tree(path):
+        return []
     peers = _hermes_db_candidates()
     seeds = peers if _same_path(path, peers) or _same_path(path / "state.db", peers) else [path]
     seen_db: set[str] = set()
     seen_id: set[str] = set()
     hits = []
+    errors: list[PageError] = []
+    opened = False
     for seed in seeds:
+        if _blocked_tree(seed):
+            continue
         for db in _hermes_state_files(seed):
+            if _blocked_tree(db) or _is_windows_tree(db):
+                continue
             try:
                 key = str(db.resolve())
             except OSError:
@@ -1554,52 +1780,69 @@ def _enum_hermes_home(path: Path) -> list[dict]:
             seen_db.add(key)
             try:
                 rows = _enum_hermes(db)
-            except PageError:
+            except PageError as exc:
+                errors.append(exc)
                 continue
+            opened = True
             for hit in rows:
                 if hit["id"] in seen_id:
                     continue
                 seen_id.add(hit["id"])
                 hits.append(hit)
+    # A store that cannot be read is unmeasured, not an empty count.
+    if not opened and errors:
+        raise errors[-1]
     return hits
 
 
 def _copilot_identity(path: Path) -> tuple[str, str]:
-    """session.start carries the id. The directory name is not always that id."""
+    """session.start carries the id. Stop there so later events stay unread."""
     sid = path.parent.name
     cwd = ""
+    if is_legal(str(path)) or _blocked_tree(path):
+        return sid, cwd
     try:
-        with path.open("rb") as handle:
-            raw = handle.read(HEAD_BYTES)
+        handle = path.open("rb")
     except OSError:
         return sid, cwd
-    for line in raw.splitlines():
-        piece = line.strip()
-        if not piece:
-            continue
-        try:
-            obj = json.loads(piece.decode("utf-8", errors="replace"))
-        except ValueError:
-            continue
-        if not isinstance(obj, dict) or obj.get("type") != "session.start":
-            continue
-        data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
-        found = data.get("sessionId") or data.get("session_id")
-        if isinstance(found, str) and found.strip():
-            sid = found.strip()
-        ctx = data.get("context") if isinstance(data.get("context"), dict) else {}
-        if isinstance(ctx.get("cwd"), str):
-            cwd = ctx["cwd"]
-        break
+    with handle:
+        read = 0
+        while read < HEAD_BYTES:
+            line = handle.readline()
+            if not line:
+                break
+            read += len(line)
+            piece = line.strip()
+            if not piece:
+                continue
+            try:
+                obj = json.loads(piece.decode("utf-8", errors="replace"))
+            except ValueError:
+                continue
+            if not isinstance(obj, dict) or obj.get("type") != "session.start":
+                continue
+            data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+            found = data.get("sessionId") or data.get("session_id")
+            if isinstance(found, str) and found.strip():
+                sid = found.strip()
+            ctx = data.get("context") if isinstance(data.get("context"), dict) else {}
+            if isinstance(ctx.get("cwd"), str):
+                cwd = ctx["cwd"]
+            break
     return sid, cwd
 
 
 def _enum_copilot(root: Path) -> list[dict]:
+    if _blocked_tree(root):
+        return []
     if _is_real_file(root) and root.name == "events.jsonl":
         files = [root]
     elif _is_real_dir(root):
         try:
-            files = [p for p in root.glob("*/events.jsonl") if _is_real_file(p)]
+            files = [
+                p for p in root.glob("*/events.jsonl")
+                if _is_real_file(p) and not _blocked_tree(p.parent) and not _is_windows_tree(p)
+            ]
         except OSError:
             return []
     else:
@@ -1620,7 +1863,7 @@ def _enum_copilot(root: Path) -> list[dict]:
 
 
 def _enum_task_dirs(harness: str, root: Path) -> list[dict]:
-    if not root.is_dir() or root.is_symlink():
+    if not root.is_dir() or root.is_symlink() or _blocked_tree(root):
         return []
     try:
         children = list(root.iterdir())
@@ -1630,14 +1873,16 @@ def _enum_task_dirs(harness: str, root: Path) -> list[dict]:
     hits = []
     for folder in folders:
         try:
-            if not folder.is_dir() or folder.is_symlink():
+            if not folder.is_dir() or folder.is_symlink() or _blocked_tree(folder):
                 continue
             hist = folder / "api_conversation_history.json"
-            if not hist.is_file() or hist.is_symlink():
+            if not hist.is_file() or hist.is_symlink() or _is_windows_tree(hist):
                 continue
+            title = ""
+            if not is_legal(str(hist)) and not is_legal(str(folder)):
+                title = _json_title(folder / "task_metadata.json")
             hits.append(_hit(
-                harness=harness, vendor_id=folder.name, path=hist,
-                title=_json_title(folder / "task_metadata.json"),
+                harness=harness, vendor_id=folder.name, path=hist, title=title,
                 updated=_mtime(hist), nbytes=hist.stat().st_size,
             ))
         except OSError:
@@ -1665,14 +1910,17 @@ def _enum_task_peers(harness: str, root: Path, peers: list[Path]) -> list[dict]:
 
 def _enum_messages(harness: str, root: Path) -> list[dict]:
     """Cline CLI/SDK: `<sessionId>/<sessionId>.messages.json`."""
-    if not _is_real_dir(root):
+    if not _is_real_dir(root) or _blocked_tree(root):
         return []
     files: list[Path] = []
     named = root / f"{root.name}.messages.json"
-    if _is_real_file(named):
+    if _is_real_file(named) and not _is_windows_tree(named):
         files.append(named)
     try:
-        files.extend(p for p in root.glob("*/*.messages.json") if _is_real_file(p))
+        files.extend(
+            p for p in root.glob("*/*.messages.json")
+            if _is_real_file(p) and not _blocked_tree(p.parent) and not _is_windows_tree(p)
+        )
     except OSError:
         return []
     hits = []
@@ -1680,9 +1928,9 @@ def _enum_messages(harness: str, root: Path) -> list[dict]:
     for path in files:
         vid = path.parent.name if path.parent != root else path.name[: -len(".messages.json")]
         manifest = path.parent / f"{vid}.json"
+        title = "" if is_legal(str(path)) else _json_title(manifest)
         hit = _hit(
-            harness=harness, vendor_id=vid, path=path,
-            title=_json_title(manifest),
+            harness=harness, vendor_id=vid, path=path, title=title,
             updated=_mtime(path), nbytes=path.stat().st_size,
         )
         if hit["id"] in seen:
@@ -1725,6 +1973,8 @@ def _json_obj(path: Path, limit: int = 262144) -> dict:
 
 def _project_root_file(path: Path) -> str:
     marker = path.parent.parent / ".project_root"
+    if _is_windows_tree(marker):
+        return ""
     try:
         if marker.is_file() and not marker.is_symlink() and marker.stat().st_size < 1024:
             return marker.read_text(encoding="utf-8").strip()
@@ -1733,82 +1983,136 @@ def _project_root_file(path: Path) -> str:
     return ""
 
 
+def _chat_files(root: Path) -> list[Path]:
+    """Gemini and Qwen chat files. Does not descend into C:\\Windows."""
+    found: list[Path] = []
+    if root.name == "chats":
+        try:
+            children = list(root.iterdir())
+        except OSError:
+            return []
+        for child in children:
+            if child.suffix.lower() in (".jsonl", ".json") and _is_real_file(child) and not _is_windows_tree(child):
+                found.append(child)
+        return found
+    try:
+        projects = list(root.iterdir())
+    except OSError:
+        return []
+    for project in projects:
+        if not _is_real_dir(project) or _blocked_tree(project):
+            continue
+        chats = project / "chats"
+        if not _is_real_dir(chats) or _blocked_tree(chats):
+            continue
+        try:
+            walker = os.walk(chats)
+        except OSError:
+            continue
+        for dirpath, dirnames, filenames in walker:
+            _prune_dirs(dirpath, dirnames)
+            for name in filenames:
+                path = Path(dirpath) / name
+                if path.suffix.lower() in (".jsonl", ".json") and _is_real_file(path) and not _is_windows_tree(path):
+                    found.append(path)
+    return found
+
+
 def _enum_chat_tmp(harness: str, root: Path) -> list[dict]:
     """Gemini `tmp/<project>/chats/*.{json,jsonl}` and Qwen `projects/<cwd>/chats/*.jsonl`."""
-    if not _is_real_dir(root):
-        return []
-    patterns = ("*.jsonl", "*.json") if root.name == "chats" else ("*/chats/**/*.jsonl", "*/chats/**/*.json")
-    files: list[Path] = []
-    try:
-        for pattern in patterns:
-            files.extend(root.glob(pattern))
-    except OSError:
+    if not _is_real_dir(root) or _blocked_tree(root):
         return []
     hits = []
     seen: set[str] = set()
-    for path in files:
-        if not _is_real_file(path) or path.name == "sessions.json":
+    for path in _chat_files(root):
+        if path.name == "sessions.json":
             continue
         key = str(path)
         if key in seen:
             continue
         seen.add(key)
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        cwd = "" if is_legal(str(path)) else _project_root_file(path)
         hits.append(_hit(
-            harness=harness, vendor_id=path.stem, path=path,
-            cwd=_project_root_file(path),
-            updated=_mtime(path), nbytes=path.stat().st_size,
+            harness=harness, vendor_id=path.stem, path=path, cwd=cwd,
+            updated=st.st_mtime, nbytes=st.st_size,
         ))
     return hits
 
 
 def _enum_continue(root: Path) -> list[dict]:
-    if not _is_real_dir(root):
+    if not _is_real_dir(root) or _blocked_tree(root):
         return []
     try:
-        files = [p for p in root.glob("*.json") if _is_real_file(p) and p.name != "sessions.json"]
+        files = [
+            p for p in root.glob("*.json")
+            if _is_real_file(p) and p.name != "sessions.json" and not _is_windows_tree(p)
+        ]
     except OSError:
         return []
     hits = []
     for path in files:
-        obj = _json_obj(path)
-        sid = obj.get("sessionId") or obj.get("id")
-        vid = sid.strip() if isinstance(sid, str) and sid.strip() else path.stem
-        title = obj.get("title") if isinstance(obj.get("title"), str) else ""
-        cwd = obj.get("workspaceDirectory") if isinstance(obj.get("workspaceDirectory"), str) else ""
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        if is_legal(str(path)):
+            hits.append(_hit(
+                harness="continue", vendor_id=path.stem, path=path,
+                updated=st.st_mtime, nbytes=st.st_size,
+            ))
+            continue
+        fields = _header_fields(path, ("sessionId", "id", "title", "workspaceDirectory"))
+        sid = (fields.get("sessionId") or fields.get("id") or "").strip()
+        vid = sid or path.stem
         hits.append(_hit(
-            harness="continue", vendor_id=vid, path=path, cwd=cwd, title=_one_line(title, 120),
-            updated=_mtime(path), nbytes=path.stat().st_size,
+            harness="continue", vendor_id=vid, path=path,
+            cwd=fields.get("workspaceDirectory") or "",
+            title=_one_line(fields.get("title") or "", 120),
+            updated=st.st_mtime, nbytes=st.st_size,
         ))
     return hits
 
 
 def _enum_aider(path: Path) -> list[dict]:
-    """One history file from AIDER_CHAT_HISTORY_FILE. There is no global session directory."""
-    if not _is_real_file(path):
+    """One history file from AIDER_CHAT_HISTORY_FILE. Counted, not parsed."""
+    if not _is_real_file(path) or _is_windows_tree(path):
+        return []
+    try:
+        st = path.stat()
+    except OSError:
         return []
     return [_hit(
         harness="aider", vendor_id=path.name, path=path,
-        updated=_mtime(path), nbytes=path.stat().st_size,
+        updated=st.st_mtime, nbytes=st.st_size,
     )]
 
 
 def _enum_goose(path: Path) -> list[dict]:
+    if _blocked_tree(path):
+        return []
     db = path if _is_real_file(path) and path.suffix.lower() == ".db" else None
     if _is_real_dir(path):
         nested = path / "sessions.db"
-        if _is_real_file(nested):
+        if _is_real_file(nested) and not _is_windows_tree(nested):
             db = nested
         else:
             try:
-                files = [p for p in path.glob("*.jsonl") if _is_real_file(p)]
+                files = [p for p in path.glob("*.jsonl") if _is_real_file(p) and not _is_windows_tree(p)]
             except OSError:
                 return []
             hits = []
             for item in files:
-                cwd, title = _sniff(item)
+                try:
+                    st = item.stat()
+                except OSError:
+                    continue
                 hits.append(_hit(
-                    harness="goose", vendor_id=item.stem, path=item, cwd=cwd, title=title,
-                    updated=_mtime(item), nbytes=item.stat().st_size,
+                    harness="goose", vendor_id=item.stem, path=item,
+                    updated=st.st_mtime, nbytes=st.st_size,
                 ))
             return hits
     if db is None:
@@ -1825,29 +2129,42 @@ def _enum_goose(path: Path) -> list[dict]:
 
 
 def _enum_amp(root: Path) -> list[dict]:
-    if _is_real_file(root) and root.suffix.lower() == ".json":
+    if _blocked_tree(root):
+        return []
+    if _is_real_file(root) and root.suffix.lower() == ".json" and not _is_windows_tree(root):
         files = [root]
     elif _is_real_dir(root):
         try:
-            files = [p for p in root.glob("*.json") if _is_real_file(p)]
+            files = [p for p in root.glob("*.json") if _is_real_file(p) and not _is_windows_tree(p)]
         except OSError:
             return []
     else:
         return []
     hits = []
     for path in files:
-        obj = _json_obj(path)
-        sid = obj.get("id")
-        vid = sid.strip() if isinstance(sid, str) and sid.strip() else path.stem
-        title = obj.get("title") if isinstance(obj.get("title"), str) else ""
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        if is_legal(str(path)):
+            hits.append(_hit(
+                harness="amp", vendor_id=path.stem, path=path,
+                updated=st.st_mtime, nbytes=st.st_size,
+            ))
+            continue
+        fields = _header_fields(path, ("id", "title"))
+        sid = (fields.get("id") or "").strip()
         hits.append(_hit(
-            harness="amp", vendor_id=vid, path=path, title=_one_line(title, 120),
-            updated=_mtime(path), nbytes=path.stat().st_size,
+            harness="amp", vendor_id=sid or path.stem, path=path,
+            title=_one_line(fields.get("title") or "", 120),
+            updated=st.st_mtime, nbytes=st.st_size,
         ))
     return hits
 
 
 def _enum_openhands(root: Path) -> list[dict]:
+    if _blocked_tree(root):
+        return []
     states: list[Path] = []
     if _is_real_file(root) and root.name == "base_state.json":
         states = [root]
@@ -1857,23 +2174,38 @@ def _enum_openhands(root: Path) -> list[dict]:
             states = [direct]
         else:
             try:
-                states = [p for p in root.glob("*/base_state.json") if _is_real_file(p)]
-                states += [p for p in root.glob("conversations/*/base_state.json") if _is_real_file(p)]
+                states = [
+                    p for p in root.glob("*/base_state.json")
+                    if _is_real_file(p) and not _blocked_tree(p.parent)
+                ]
+                states += [
+                    p for p in root.glob("conversations/*/base_state.json")
+                    if _is_real_file(p) and not _blocked_tree(p.parent)
+                ]
             except OSError:
                 return []
     hits = []
     seen: set[str] = set()
     for path in states:
-        obj = _json_obj(path)
-        sid = obj.get("id") or obj.get("conversation_id")
-        vid = sid.strip() if isinstance(sid, str) and sid.strip() else path.parent.name
-        title = obj.get("title") if isinstance(obj.get("title"), str) else ""
-        cwd = obj.get("workspace") if isinstance(obj.get("workspace"), str) else ""
-        if not cwd and isinstance(obj.get("cwd"), str):
-            cwd = obj["cwd"]
+        if _is_windows_tree(path):
+            continue
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        if is_legal(str(path)):
+            vid = path.parent.name
+            title = ""
+            cwd = ""
+        else:
+            fields = _header_fields(path, ("id", "conversation_id", "title", "workspace", "cwd"))
+            sid = (fields.get("id") or fields.get("conversation_id") or "").strip()
+            vid = sid or path.parent.name
+            title = _one_line(fields.get("title") or "", 120)
+            cwd = fields.get("workspace") or fields.get("cwd") or ""
         hit = _hit(
-            harness="openhands", vendor_id=vid, path=path, cwd=cwd, title=_one_line(title, 120),
-            updated=_mtime(path), nbytes=path.stat().st_size,
+            harness="openhands", vendor_id=vid, path=path, cwd=cwd, title=title,
+            updated=st.st_mtime, nbytes=st.st_size,
         )
         if hit["id"] in seen:
             continue
@@ -1894,12 +2226,14 @@ def _crush_db(project: dict) -> tuple[Path | None, str]:
         db = Path(cwd) / ".crush" / "crush.db"
     else:
         return None, cwd
-    if not _is_real_file(db):
+    if not _is_real_file(db) or _is_windows_tree(db) or _blocked_tree(db):
         return None, cwd
     return db, cwd
 
 
 def _enum_crush(path: Path) -> list[dict]:
+    if _blocked_tree(path):
+        return []
     projects: list[dict] = []
     if _is_real_file(path) and path.name == "projects.json":
         obj = _json_obj(path, limit=1_048_576)
@@ -1939,8 +2273,10 @@ def _enum_crush(path: Path) -> list[dict]:
 
 def _enum_amazonq(path: Path) -> list[dict]:
     """Only an explicit AMAZONQ_HISTORY file or directory. `~/.aws/amazonq` is not a transcript store."""
+    if _blocked_tree(path):
+        return []
     files: list[Path] = []
-    if _is_real_file(path):
+    if _is_real_file(path) and not _is_windows_tree(path):
         files = [path]
     elif _is_real_dir(path):
         try:
@@ -1964,15 +2300,15 @@ def _enum_amazonq(path: Path) -> list[dict]:
 
 def _enum_dsh(root: Path) -> list[dict]:
     """Count `session.v3.jsonl.zstd`. Do not decompress or descend into dependency trees."""
-    if not _is_real_dir(root):
+    if not _is_real_dir(root) or _blocked_tree(root):
         return []
     files: list[Path] = []
     try:
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [name for name in dirnames if name not in ("node_modules", ".git")]
+            _prune_dirs(dirpath, dirnames, ("node_modules", ".git"))
             if "session.v3.jsonl.zstd" in filenames:
                 path = Path(dirpath) / "session.v3.jsonl.zstd"
-                if _is_real_file(path):
+                if _is_real_file(path) and not _is_windows_tree(path):
                     files.append(path)
     except OSError:
         return []
@@ -2046,7 +2382,7 @@ def _antigravity_db(path: Path) -> Path | None:
 
 def _antigravity_files(harness: str, root: Path, seen: set[str]) -> list[dict]:
     conv_dir = root / "conversations" if root.is_dir() else root.parent / "conversations"
-    if not _is_real_dir(conv_dir):
+    if not _is_real_dir(conv_dir) or _blocked_tree(conv_dir):
         return []
     hits = []
     try:
@@ -2055,6 +2391,8 @@ def _antigravity_files(harness: str, root: Path, seen: set[str]) -> list[dict]:
         return []
     for conv in children:
         if conv.suffix.lower() != ".db" or not _is_real_file(conv) or not conv.stem:
+            continue
+        if _is_windows_tree(conv) or _blocked_tree(conv):
             continue
         if conv.stem.lower() in seen:
             continue
@@ -2188,6 +2526,10 @@ def _walk_report(homes: dict) -> tuple[list[dict], dict[str, str]]:
     )
     for name, fn in mapping:
         path = homes.get(name)
+        if path is not None and _blocked_tree(path):
+            if _path_here(path):
+                failed[name] = "UNMEASURED"
+            continue
         if not _listed_store(name, path):
             continue
         try:
@@ -2220,19 +2562,24 @@ def _match(hit: dict, query: str, harness: str, cwd: str) -> bool:
 
 
 def _enrich(rows: list[dict]) -> None:
-    """Titles for the rows on screen. Legal rows stay blank."""
+    """Titles for the rows on screen. Legal rows stay blank and unopened."""
     for row in rows:
-        if row.get("legal"):
+        path = Path(row.get("path") or "")
+        stream = row.get("stream") or ""
+        if row.get("legal") or is_legal(str(path), stream, row.get("cwd") or "", row.get("title") or ""):
+            row["legal"] = True
             row["title"] = ""
             row["cwd"] = ""
             continue
+        if _is_windows_tree(path) or _blocked_tree(path):
+            continue
         if row.get("title"):
             continue
-        path = Path(row.get("path") or "")
-        if path.suffix.lower() != ".jsonl" or not path.is_file():
+        suffix = path.suffix.lower()
+        if suffix != ".jsonl" or not path.is_file():
             continue
         cwd, title = "", ""
-        if row.get("harness") in ("claude", "claude_desktop"):
+        if row.get("harness") in ("claude", "claude_desktop", "cursor"):
             cwd, title = _claude_meta(path)
         if not title or not cwd:
             sniffed_cwd, sniffed_title = _sniff(path, HEAD_BYTES)
@@ -2240,13 +2587,18 @@ def _enrich(rows: list[dict]) -> None:
                 cwd = sniffed_cwd
             if not title:
                 title = sniffed_title
+        if is_legal(str(path), stream, cwd or row.get("cwd") or "", title or ""):
+            row["legal"] = True
+            row["title"] = ""
+            row["cwd"] = ""
+            continue
         if not title:
             title = _first_user_title(path)
         if cwd and not row.get("cwd"):
             row["cwd"] = cwd
         if title:
             row["title"] = title
-        if is_legal(str(path), row.get("stream") or "", row.get("cwd") or "", row.get("title") or ""):
+        if is_legal(str(path), stream, row.get("cwd") or "", row.get("title") or ""):
             row["legal"] = True
             row["title"] = ""
             row["cwd"] = ""
@@ -2478,6 +2830,22 @@ def _read_jsonl(path: Path) -> tuple[list[dict], bool]:
     return _rows_from_bytes(raw)
 
 
+def _engine_role(kind: str) -> str:
+    """Map a harness label onto the role names load already stores."""
+    name = str(kind or "").strip().lower()
+    if name in ("user", "human"):
+        return "user"
+    if name == "assistant":
+        return "assistant"
+    if name == "system":
+        return "system"
+    if name in ("tool_call", "tool_use"):
+        return "tool_call"
+    if name in ("tool_result", "tool"):
+        return "tool_result"
+    return "meta"
+
+
 def _turns_from_rows(rows: list[dict], harness: str) -> list[dict]:
     turns = []
 
@@ -2492,39 +2860,48 @@ def _turns_from_rows(rows: list[dict], harness: str) -> list[dict]:
         })
 
     if harness in ("claude", "claude_desktop", "cursor", "gemini"):
-        role_of = {"user": "user", "assistant": "assistant", "system": "system"}
+        kept = {"user", "human", "assistant", "system", "tool_result", "tool_use"}
         for obj in rows:
-            kind = str(obj.get("type") or obj.get("role") or "")
-            if kind not in role_of and kind not in ("tool_result", "tool_use"):
+            kind = str(obj.get("type") or obj.get("role") or "").strip().lower()
+            if kind not in kept:
                 continue
-            msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
-            role = role_of.get(kind, "tool_result" if "tool" in kind else "meta")
             if kind == "tool_use":
                 role = "tool_call"
+            elif kind == "human":
+                role = "user"
+            elif kind in ("user", "assistant", "system"):
+                role = kind
+            else:
+                role = "tool_result"
+            msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
             add(role, _text_of(msg.get("content") if isinstance(msg, dict) else msg),
                 (msg.get("model") if isinstance(msg, dict) else None))
         return turns
     if harness == "grok":
-        role_of = {
-            "user": "user", "assistant": "assistant", "system": "system",
-            "tool_result": "tool_result", "tool": "tool_result",
-            "tool_call": "tool_call",
-        }
         for obj in rows:
-            kind = str(obj.get("type") or obj.get("role") or "meta")
+            kind = str(obj.get("type") or obj.get("role") or "meta").strip().lower()
             text = obj.get("text")
+            if text is None and kind == "reasoning":
+                text = _text_of(obj.get("summary"))
             if text is None:
                 text = obj.get("content") if not isinstance(obj.get("content"), (dict, list)) else _text_of(obj.get("content"))
             if isinstance(text, (dict, list)):
                 text = _text_of(text)
-            add(role_of.get(kind, "meta"), "" if text is None else str(text), obj.get("model"))
+            add(_engine_role(kind), "" if text is None else str(text), obj.get("model"))
+            if kind == "assistant" and isinstance(obj.get("tool_calls"), list):
+                for call in obj["tool_calls"]:
+                    if not isinstance(call, dict):
+                        continue
+                    name = str(call.get("name") or "").strip()
+                    if name:
+                        add("tool_call", name, obj.get("model"))
         return turns
     if harness == "codex":
         for obj in rows:
             if obj.get("type") != "response_item":
                 continue
             payload = obj.get("payload") if isinstance(obj.get("payload"), dict) else {}
-            role = str(payload.get("role") or "meta")
+            role = str(payload.get("role") or "meta").strip().lower()
             if role not in ("user", "assistant", "system"):
                 role = "meta"
             add(role, _text_of(payload.get("content")))
@@ -2547,7 +2924,7 @@ def _turns_from_rows(rows: list[dict], harness: str) -> list[dict]:
             add(role_of[kind], _text_of(text), data.get("model") if isinstance(data.get("model"), str) else None)
         return turns
     if harness in _MESSAGE_HARNESSES:
-        role_of = {"user": "user", "assistant": "assistant", "system": "system"}
+        kept = {"user", "human", "assistant", "system", "tool_result", "tool_use", "tool_call"}
         for obj in rows:
             msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
             kind = str(
@@ -2555,10 +2932,17 @@ def _turns_from_rows(rows: list[dict], harness: str) -> list[dict]:
                 or (msg.get("role") if isinstance(msg, dict) else "")
                 or obj.get("type")
                 or ""
-            )
-            if kind not in role_of and kind not in ("tool_result", "tool_use", "tool_call"):
+            ).strip().lower()
+            if kind not in kept:
                 continue
-            role = role_of.get(kind, "tool_call" if kind == "tool_use" else "tool_result")
+            if kind == "human":
+                role = "user"
+            elif kind == "tool_use":
+                role = "tool_call"
+            elif kind in ("user", "assistant", "system"):
+                role = kind
+            else:
+                role = "tool_result"
             content = msg.get("content") if isinstance(msg, dict) else obj.get("content")
             if content is None and isinstance(msg, dict):
                 content = msg.get("text")
@@ -2641,6 +3025,18 @@ def _turns_openwork(hit: dict) -> tuple[list[dict], bool, int]:
         msgs = msgs[:SESSION_CAP]
     if parts and len(parts) > SESSION_CAP:
         parts = parts[:SESSION_CAP]
+    return _openwork_turns(msgs, parts), truncated, count
+
+
+def _openwork_role(kind: str) -> str:
+    name = str(kind or "").strip().lower()
+    if name in ("user", "assistant", "system"):
+        return name
+    return "meta"
+
+
+def _openwork_turns(msgs: list[tuple], parts: list[tuple] | None) -> list[dict]:
+    """Same roles for load and preview. Tool parts use the engine tool_call name."""
     roles: dict[str, str] = {}
     parsed_msgs = []
     for mid, data in msgs:
@@ -2650,8 +3046,7 @@ def _turns_openwork(hit: dict) -> tuple[list[dict], bool, int]:
             obj = {"text": str(data)}
         if not isinstance(obj, dict):
             obj = {"text": str(data)}
-        role = str(obj.get("role") or obj.get("type") or "meta")
-        roles[str(mid)] = role
+        roles[str(mid)] = _openwork_role(str(obj.get("role") or obj.get("type") or "meta"))
         parsed_msgs.append(obj)
     if parts:
         turns = []
@@ -2662,12 +3057,22 @@ def _turns_openwork(hit: dict) -> tuple[list[dict], bool, int]:
                 continue
             if not isinstance(obj, dict):
                 continue
+            part_type = str(obj.get("type") or "").strip().lower()
+            if part_type == "tool":
+                name = str(obj.get("tool") or "").strip()
+                if not name:
+                    continue
+                turns.append({
+                    "seq": len(turns) + 1,
+                    "role": "tool_call",
+                    "text": name,
+                    "model": None,
+                })
+                continue
             text = _text_of(obj.get("text") if obj.get("text") is not None else obj.get("content"))
             if not str(text or "").strip():
                 continue
-            role = str(roles.get(str(mid)) or obj.get("type") or "meta")
-            if role not in ("user", "assistant", "system"):
-                role = "meta"
+            role = roles.get(str(mid)) or _openwork_role(str(obj.get("type") or "meta"))
             turns.append({
                 "seq": len(turns) + 1,
                 "role": role,
@@ -2675,19 +3080,17 @@ def _turns_openwork(hit: dict) -> tuple[list[dict], bool, int]:
                 "model": obj.get("model"),
             })
         if turns:
-            return turns, truncated, count
+            return turns
     turns = []
     for obj in parsed_msgs:
-        role = str(obj.get("role") or obj.get("type") or "meta")
-        if role not in ("user", "assistant", "system"):
-            role = "meta"
+        role = _openwork_role(str(obj.get("role") or obj.get("type") or "meta"))
         turns.append({
             "seq": len(turns) + 1,
             "role": role,
             "text": _text_of(obj.get("content") if "content" in obj else obj.get("text")),
             "model": obj.get("model"),
         })
-    return turns, truncated, count
+    return turns
 
 
 def _guard_size(path: Path) -> int:
@@ -2737,7 +3140,7 @@ def _hermes_turns(rows: list[tuple]) -> list[dict]:
     return turns
 
 
-def _hermes_query(db: Path, vendor_id: str, limit: int) -> tuple[int, list[tuple]]:
+def _hermes_query(db: Path, vendor_id: str, limit: int, skip_system: bool = False) -> tuple[int, list[tuple]]:
     if not db.is_file():
         raise PageError("UNMEASURED", str(db))
     try:
@@ -2756,11 +3159,19 @@ def _hermes_query(db: Path, vendor_id: str, limit: int) -> tuple[int, list[tuple
             "SELECT COUNT(*) FROM messages WHERE session_id=?",
             (vendor_id,),
         ).fetchone()
-        fetched = list(con.execute(
-            "SELECT role, content FROM messages WHERE session_id=? "
-            "ORDER BY timestamp LIMIT ?",
-            (vendor_id, int(limit)),
-        ))
+        if skip_system:
+            fetched = list(con.execute(
+                "SELECT role, content FROM messages WHERE session_id=? "
+                "AND lower(COALESCE(role, '')) != 'system' "
+                "ORDER BY timestamp LIMIT ?",
+                (vendor_id, int(limit)),
+            ))
+        else:
+            fetched = list(con.execute(
+                "SELECT role, content FROM messages WHERE session_id=? "
+                "ORDER BY timestamp LIMIT ?",
+                (vendor_id, int(limit)),
+            ))
     except PageError:
         raise
     except sqlite3.Error as exc:
@@ -3229,18 +3640,17 @@ def write_pair(out_dir: Path, stem: str, payload: bytes, source_sha: str, n_turn
 
 
 def _speakable(turns: list[dict]) -> list[dict]:
-    """User and assistant lines. System prompts stay out of the preview pane."""
+    """Engine roles load already stored. System prompts stay out of the pane."""
+    kept = {"user", "assistant", "tool_call", "tool_result", "meta"}
     return [
         turn for turn in turns
-        if turn.get("role") in ("user", "assistant") and (turn.get("text") or "").strip()
+        if turn.get("role") in kept and (turn.get("text") or "").strip()
     ]
 
 
 def _clip_turns(turns: list[dict], n: int, chars: int) -> list[dict]:
-    picked = _speakable(turns)
-    source = picked if picked else turns
     shown = []
-    for turn in source[: max(0, n)]:
+    for turn in _speakable(turns)[: max(0, n)]:
         text = (turn.get("text") or "").strip()
         if chars >= 0 and len(text) > chars:
             text = text[:chars].rstrip() + "…"
@@ -3294,60 +3704,12 @@ def _jsonl_head_turns(path: Path, harness: str, n_want: int) -> tuple[list[dict]
     return parsed, len(parsed), False
 
 
-def _part_texts(rows: list[tuple]) -> dict:
-    """Map message_id to the joined text of its part rows. Skips empty parts."""
-    texts: dict[str, list[str]] = {}
-    for row in rows:
-        if len(row) != 2:
-            continue
-        mid, data = row
-        try:
-            obj = json.loads(data) if isinstance(data, str) else json.loads(data.decode("utf-8"))
-        except (ValueError, AttributeError):
-            continue
-        if not isinstance(obj, dict):
-            continue
-        text = _text_of(obj.get("text") if obj.get("text") is not None else obj.get("content"))
-        if not str(text or "").strip():
-            text = _text_of(obj)
-        if not str(text or "").strip():
-            continue
-        texts.setdefault(str(mid), []).append(str(text))
-    return {mid: "\n".join(items) for mid, items in texts.items()}
-
-
-def _message_turns(rows: list[tuple], parts: dict | None = None) -> list[dict]:
-    turns = []
-    for row in rows:
-        if len(row) == 2 and parts is not None:
-            mid, data = row
-        else:
-            mid, data = None, row[-1]
-        try:
-            obj = json.loads(data) if isinstance(data, str) else json.loads(data.decode("utf-8"))
-        except (ValueError, AttributeError):
-            obj = {"text": str(data)}
-        role = str(obj.get("role") or obj.get("type") or "meta")
-        if role not in ("user", "assistant", "system"):
-            role = "meta"
-        text = ""
-        if mid is not None and parts is not None:
-            text = parts.get(str(mid)) or ""
-        if not str(text or "").strip():
-            text = _text_of(obj.get("content") if "content" in obj else obj.get("text"))
-        turns.append({
-            "seq": len(turns) + 1,
-            "role": role,
-            "text": text,
-            "model": obj.get("model"),
-        })
-    return turns
-
-
 def _preview_hermes(hit: dict, n_want: int, chars: int) -> dict:
     if hit.get("legal"):
         raise PageError("LEGAL_OMITTED", hit["id"])
-    count, rows = _hermes_query(Path(hit["path"]), hit["vendor_id"], max(0, int(n_want)))
+    count, rows = _hermes_query(
+        Path(hit["path"]), hit["vendor_id"], max(0, int(n_want)), skip_system=True,
+    )
     shown = _clip_turns(_hermes_turns(rows), n_want, chars)
     return _preview_result(hit, "OK", count, shown)
 
@@ -3392,7 +3754,9 @@ def _preview_openwork(hit: dict, n_want: int, chars: int) -> dict:
                 pass
             del con
             gc.collect()
-    shown = _clip_turns(_message_turns(msgs, _part_texts(prows)), n_want, chars)
+    known = {str(mid) for mid, _data in msgs}
+    prows = [row for row in prows if str(row[0]) in known]
+    shown = _clip_turns(_openwork_turns(msgs, prows), n_want, chars)
     return _preview_result(hit, "OK", n_turns, shown)
 
 
@@ -3903,6 +4267,12 @@ def resume(rec_id: str, homes: dict | None = None, launch: bool = False) -> dict
     elif harness == "crush":
         argv = ["crush", "--session", vid]
         binary = _which(["crush"], [])
+    elif harness == "claude_desktop":
+        # The claude CLI and Claude.exe are other apps. Do not start either.
+        return _result("resume", "NO_SECOND_APP", {
+            "id": hit["id"], "harness": harness, "argv": None, "launched": False,
+            "detail": "Claude Desktop is not started. Resume does not launch a second app.",
+        })
     elif harness in ("openwork", "cowork"):
         opencode = (hit.get("aliases") or {}).get("opencode_id") or vid
         return _result("resume", "OPENWORK_FOCUS", {
@@ -3918,7 +4288,19 @@ def resume(rec_id: str, homes: dict | None = None, launch: bool = False) -> dict
                 "id": hit["id"], "harness": harness, "argv": None, "launched": False,
             })
         binary = _binary_for(harness)
-        if not binary:
+        if not binary or harness in ("claude_desktop", "cowork", "openwork"):
+            if harness in ("cowork", "openwork"):
+                opencode = (hit.get("aliases") or {}).get("opencode_id") or vid
+                return _result("resume", "OPENWORK_FOCUS", {
+                    "id": hit["id"], "harness": harness, "opencode_id": opencode,
+                    "argv": [], "launched": False,
+                    "detail": "focus this id in OpenWork; this plug does not spawn OpenWork.exe",
+                })
+            if harness == "claude_desktop":
+                return _result("resume", "NO_SECOND_APP", {
+                    "id": hit["id"], "harness": harness, "argv": None, "launched": False,
+                    "detail": "Claude Desktop is not started. Resume does not launch a second app.",
+                })
             return _result("resume", "UNMEASURED", {
                 "id": hit["id"], "harness": harness, "argv": None, "launched": False,
             })
@@ -3939,6 +4321,7 @@ def resume(rec_id: str, homes: dict | None = None, launch: bool = False) -> dict
         return _result("resume", "LAUNCHED", gate)
     if binary:
         argv = [binary, *argv[1:]]
+    argv = [part for part in argv if part != "-p"]
     gate = {
         "id": hit["id"], "harness": harness, "argv": argv, "cwd": cwd,
         "binary": binary, "launched": False,
@@ -3954,6 +4337,243 @@ def resume(rec_id: str, homes: dict | None = None, launch: bool = False) -> dict
     gate["launched"] = True
     gate["pid"] = proc.pid
     return _result("resume", "LAUNCHED", gate)
+
+
+def _launch_family(name: str) -> str:
+    if name in ("cursor", "agent"):
+        return "cursor"
+    if name in ("openwork", "cowork"):
+        return "openwork"
+    return name
+
+
+def _focus_only(hit: dict, chosen: str) -> dict:
+    """OpenWork and Cowork are focused. The exe is not started."""
+    aliases = hit.get("aliases") if isinstance(hit.get("aliases"), dict) else {}
+    harness = str(hit.get("harness") or "")
+    vid = str(hit.get("vendor_id") or "")
+    owned = ""
+    if harness in ("openwork", "cowork"):
+        raw = aliases.get("opencode_id") or vid
+        owned = str(raw).strip() if raw else ""
+    else:
+        raw = aliases.get("opencode_id")
+        if isinstance(raw, str):
+            owned = raw.strip()
+    gate = {
+        "id": hit.get("id"), "harness": harness, "target": chosen,
+        "argv": [], "launched": False,
+    }
+    if not owned:
+        gate["detail"] = "OpenWork and Cowork are not started, and this row has no id to focus"
+        return _result("launch", "NEED_LOAD", gate)
+    gate["opencode_id"] = owned
+    gate["detail"] = "focus this id in OpenWork; this plug does not spawn OpenWork.exe"
+    return _result("launch", "OPENWORK_FOCUS", gate)
+
+
+def _owned_target_id(hit: dict, app: str) -> str | None:
+    """An id that already belongs to app, or None. Does not read a transcript."""
+    aliases = hit.get("aliases") if isinstance(hit.get("aliases"), dict) else {}
+    harness = str(hit.get("harness") or "")
+    if harness and _launch_family(harness) == _launch_family(app):
+        if _launch_family(app) == "openwork":
+            raw = aliases.get("opencode_id") or hit.get("vendor_id")
+        else:
+            raw = hit.get("vendor_id")
+        text = "" if raw is None else str(raw).strip()
+        return text or None
+    for key in (f"{app}_id", app):
+        val = aliases.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    if _launch_family(app) == "cursor":
+        for key in ("agent_id", "cursor_id"):
+            val = aliases.get(key)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    if _launch_family(app) == "openwork":
+        val = aliases.get("opencode_id")
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
+def _target_resume_argv(app: str, owned: str, hit: dict) -> list[str] | None:
+    """Resume argv when app already owns an id. None means do not resume it."""
+    path = str(hit.get("path") or "")
+    if app == "grok":
+        return ["grok", "--resume", owned]
+    if app == "claude":
+        return ["claude", "--resume", owned]
+    if app == "codex":
+        return ["codex", "resume", owned]
+    if app in ("cursor", "agent"):
+        return ["agent", "--resume", owned]
+    if app == "hermes":
+        return ["hermes", "--resume", owned]
+    if app == "cline" and path.endswith(".messages.json") and hit.get("harness") == "cline":
+        return ["cline", "--id", owned]
+    if app == "goose":
+        return ["goose", "session", "--resume", "--session-id", owned]
+    if app == "qwen":
+        return ["qwen", "--resume", owned]
+    if app == "copilot":
+        return ["copilot", f"--resume={owned}"]
+    if app == "crush":
+        return ["crush", "--session", owned]
+    return None
+
+
+def launch(rec_id: str, homes: dict | None = None, target: str | None = None,
+           out_dir: Path | None = None) -> dict:
+    """Start the session's own app, or export and start a different one.
+
+    A different app is started in the session folder as the program name only.
+    No resume id and no -p. OpenWork and Cowork are focus-only. Claude Desktop
+    is not started.
+    """
+    homes = homes if homes is not None else default_homes()
+    hit = _open_hit(_by_id(homes, rec_id))
+    harness = str(hit.get("harness") or "")
+    chosen = str(target or "").strip().lower() or harness
+    if chosen in ("openwork", "cowork"):
+        return _focus_only(hit, chosen)
+    if chosen == "claude_desktop":
+        return _result("launch", "NO_SECOND_APP", {
+            "id": hit["id"], "harness": harness, "target": chosen,
+            "argv": None, "launched": False,
+            "detail": "Claude Desktop is not started. Launch does not open a second app.",
+        })
+    if _launch_family(chosen) == _launch_family(harness):
+        return resume(rec_id, homes=homes, launch=True)
+    # List rows often omit cwd. The session folder is a header field, not the body.
+    cwd = str(hit.get("cwd") or "")
+    if not cwd and not hit.get("legal"):
+        source = Path(hit.get("path") or "")
+        sniffed, title = "", ""
+        if source.is_file() and not source.is_symlink():
+            if harness in ("claude", "claude_desktop") and source.suffix.lower() == ".jsonl":
+                sniffed, title = _claude_meta(source)
+            if not sniffed and source.suffix.lower() in (".jsonl", ".json", ".md", ".txt"):
+                sniffed, sniffed_title = _sniff(source, HEAD_BYTES)
+                title = title or sniffed_title
+            if is_legal(str(source), hit.get("stream") or "", sniffed, title or hit.get("title") or ""):
+                raise PageError("LEGAL_OMITTED", hit["id"])
+            cwd = sniffed
+    owned = _owned_target_id(hit, chosen)
+    planned = _target_resume_argv(chosen, owned, hit) if owned else None
+    if planned:
+        planned = [part for part in planned if part != "-p"]
+        spec = "cursor" if chosen in ("cursor", "agent") else chosen
+        binary = _binary_for(spec)
+        if binary:
+            planned = [binary, *planned[1:]]
+        return _result("launch", "OK", {
+            "id": hit["id"], "harness": harness, "target": chosen,
+            "argv": planned, "cwd": cwd, "binary": binary,
+            "launched": False,
+            "detail": "this app already has an id; Launch shows the resume plan and does not start it",
+        })
+    dest = out_dir if out_dir is not None else (var_dir() / "exports")
+    exported = export_md(hit["id"], dest, homes=homes)
+    exp_gate = exported.get("gate") if isinstance(exported.get("gate"), dict) else {}
+    export_path = str(exp_gate.get("out") or "")
+    spec = "cursor" if chosen in ("cursor", "agent") else chosen
+    binary = _binary_for(spec) or _which([chosen], [])
+    gate = {
+        "id": hit["id"], "harness": harness, "target": chosen,
+        "argv": [binary] if binary else [chosen],
+        "cwd": cwd, "binary": binary, "launched": False,
+        "export": export_path, "writes_vendor": False,
+    }
+    if not binary:
+        gate["detail"] = "transcript exported; the other app is not installed and was not started"
+        return _result("launch", "BINARY_ABSENT", gate)
+    if "-p" in gate["argv"] or len(gate["argv"]) != 1:
+        gate["argv"] = [binary]
+    if not cwd or not Path(cwd).is_dir():
+        gate["detail"] = "transcript exported; the session folder is missing so the other app was not started"
+        return _result("launch", "CWD_MISSING", gate)
+    flags = subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0
+    try:
+        proc = subprocess.Popen([binary], cwd=cwd, creationflags=flags, close_fds=True)
+    except OSError as exc:
+        gate["detail"] = f"transcript exported; the other app was not started: {exc}"
+        return _result("launch", "BINARY_ABSENT", gate)
+    gate["argv"] = [binary]
+    gate["launched"] = True
+    gate["pid"] = proc.pid
+    gate["detail"] = "transcript exported; the other app was started in the session folder with no resume id and no -p"
+    return _result("launch", "HANDOFF", gate)
+
+
+def handoff(rec_id: str, target: str, homes: dict | None = None,
+            root: Path | None = None, out_dir: Path | None = None) -> dict:
+    """Export and start the other app, then append var/handoffs.jsonl.
+
+    The append happens only through record_handoff. If that function is
+    missing, this leaves a typed error and does not start an app.
+    OpenWork and Cowork are not started.
+    """
+    recorder = globals().get("record_handoff")
+    chosen = str(target or "").strip().lower()
+    if not callable(recorder):
+        return _result("handoff", "HANDOFF_UNAVAILABLE", {
+            "id": rec_id, "target": chosen, "launched": False,
+            "path": str((Path(root) if root is not None else var_dir()) / "handoffs.jsonl"),
+            "detail": "record_handoff is not available; var/handoffs.jsonl was not appended",
+        })
+    if not chosen:
+        return _result("handoff", "BAD_INPUT", {
+            "id": rec_id, "target": "", "launched": False,
+            "detail": "handoff needs a target app",
+        })
+    homes = homes if homes is not None else default_homes()
+    hit = _by_id(homes, rec_id)
+    harness = str(hit.get("harness") or "")
+    if hit.get("legal"):
+        raise PageError("LEGAL_OMITTED", str(hit.get("id") or rec_id))
+    if _launch_family(chosen) == _launch_family(harness) and chosen not in ("openwork", "cowork", "claude_desktop"):
+        planned = resume(rec_id, homes=homes, launch=False)
+        planned = dict(planned)
+        planned["verb"] = "handoff"
+        gate = dict(planned.get("gate") or {})
+        gate["launched"] = False
+        gate["target"] = chosen
+        gate["detail"] = "Hand off moves harnesses. Resume stays on the session's own app."
+        planned["gate"] = gate
+        return planned
+    started = launch(rec_id, homes=homes, target=chosen, out_dir=out_dir)
+    gate = started.get("gate") if isinstance(started.get("gate"), dict) else {}
+    carried = bool(gate.get("export") or gate.get("pid"))
+    if not carried:
+        started = dict(started)
+        started["verb"] = "handoff"
+        return started
+    entry = {
+        "parent": str(hit.get("id") or rec_id),
+        "parent_harness": harness,
+        "target": chosen,
+        "binary": str(gate.get("binary") or ""),
+        "pid": gate.get("pid"),
+        "export": str(gate.get("export") or ""),
+        "cwd": str(gate.get("cwd") or ""),
+    }
+    try:
+        saved = recorder(entry, root=root)
+    except OSError as exc:
+        return _result("handoff", "HANDOFF_UNAVAILABLE", {
+            "id": hit.get("id") or rec_id, "target": chosen,
+            "launched": bool(gate.get("launched")),
+            "export": gate.get("export") or "",
+            "detail": f"record_handoff failed; var/handoffs.jsonl was not appended: {exc}",
+        })
+    out = dict(started)
+    out["verb"] = "handoff"
+    out["handoff"] = saved.get("record")
+    out["handoff_path"] = saved.get("path")
+    return out
 
 
 def redact(text: str) -> tuple[str, int]:
@@ -4233,6 +4853,13 @@ def _bounded_int(value: object, default: int, lo: int, hi: int, name: str) -> in
     return number
 
 
+def _refuse_remote_copy(dest: object) -> None:
+    """Import and export write a local copy. A URL is not a destination."""
+    text = str(dest or "").strip().lower()
+    if text.startswith(("http://", "https://", "ftp://", "ftps://")):
+        raise PageError("BAD_INPUT", "import and export stay on this computer")
+
+
 def dispatch(action: str, body: dict | None = None, homes: dict | None = None) -> dict:
     body = body or {}
     action = str(action or body.get("action") or body.get("verb") or "")
@@ -4247,6 +4874,7 @@ def dispatch(action: str, body: dict | None = None, homes: dict | None = None) -
             import formats
         except ImportError:
             raise PageError("UNMEASURED", "formats")
+        # Index only. catalog() does not walk a store and does not use the network.
         return _result("formats", "OK", formats.catalog())
     if action == "preview":
         rec_id = str(body.get("id") or "")
@@ -4259,12 +4887,18 @@ def dispatch(action: str, body: dict | None = None, homes: dict | None = None) -
         flag = body.get("fresh", False)
         if not isinstance(flag, bool):
             raise PageError("BAD_INPUT", "fresh must be boolean")
+        enrich = True
+        if "enrich" in body:
+            enrich = body.get("enrich")
+            if not isinstance(enrich, bool):
+                raise PageError("BAD_INPUT", "enrich must be boolean")
         n_limit = _bounded_int(body.get("limit"), DEFAULT_LIMIT, 1, 2000, "limit")
         return find(
             homes=homes, query=str(body.get("query") or body.get("q") or ""),
             harness=str(body.get("harness") or body.get("family") or ""),
             cwd=str(body.get("cwd") or ""),
             limit=n_limit,
+            enrich=enrich,
             drive=str(body.get("drive") or ""),
             fresh=flag,
         )
@@ -4298,6 +4932,8 @@ def dispatch(action: str, body: dict | None = None, homes: dict | None = None) -
         if not rec_id:
             raise PageError("NOT_FOUND", "id is required")
         out = body.get("out") or body.get("out_dir")
+        if action in ("import", "convert") or out:
+            _refuse_remote_copy(out)
         if action == "load" and not out:
             hit = _by_id(homes if homes is not None else _homes_for(body), rec_id)
             loaded = load_record(hit)
@@ -4315,6 +4951,7 @@ def dispatch(action: str, body: dict | None = None, homes: dict | None = None) -
         rec_id = str(body.get("id") or "")
         if not rec_id:
             raise PageError("NOT_FOUND", "id is required")
+        _refuse_remote_copy(body.get("out"))
         dest = Path(body["out"]) if body.get("out") else (var_dir() / "exports")
         return export_md(rec_id, dest, homes=homes if homes is not None else _homes_for(body))
     if action == "index":
@@ -4329,10 +4966,11 @@ def dispatch(action: str, body: dict | None = None, homes: dict | None = None) -
         # and keeps the newest file that still checks out.
         bak = Path(body["bak"]) if body.get("bak") else None
         stage = Path(body["stage"]) if body.get("stage") else None
+        # Dry check unless the caller passes boolean apply. A dry check does not write.
         flag = body.get("apply", False)
         if not isinstance(flag, bool):
             raise PageError("BAD_INPUT", "apply must be boolean")
-        apply = flag
+        apply = flag is True
         rec = recover(target_path, bak, stage, apply=apply)
         if action == "crash-recover":
             rec["verb"] = "crash-recover"
