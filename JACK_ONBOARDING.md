@@ -23,19 +23,29 @@ git clone https://github.com/keithbbf-gif/sessions-page.git
 cd sessions-page
 ```
 
-### Step B: Run the Application Directly
-Make sure Python 3.14 (or Python 3.12/3.13) is installed.
-```powershell
-# 1. Serve in your browser with instant hot-reload (recommended for UI dev):
-py -3.14 sessions_page.py serve --port 8786
-# Open http://127.0.0.1:8786 in your browser (hit F5 to reload UI edits)
+### Step B: How launch actually works
+Make sure Python 3.14 (or Python 3.12/3.13) is installed. Read this from `sessions_page.py`. The Tk desk is not the only window.
 
-# 2. Or launch the raw Tkinter desktop ledger:
+The frozen exe with no arguments (`CM Sessions.exe` / `sessions_page.exe`, `console=False`) calls `_launch_gui()`. It does not call `desk.main()`. It binds `127.0.0.1`, serves `ui/index.html` (title "CM Sessions — Full Screen UI") with `ui/app.js` and `ui/app.css`, and opens that page. It tries ports 8786 through 8795. If `/api/verbs` on one of those ports already lists `find` and `resume`, it only focuses that page. On Windows it prefers `msedge.exe --app=http://127.0.0.1:<port>/` when Edge is installed; otherwise it uses the default browser. `POST /api/shutdown` stops the server. A frozen exe serves UI from the packed `_MEIPASS` copy, so editing the source `ui` folder does not change a running exe.
+
+```powershell
+# 1. UI work against the source tree. This is the same page the exe serves.
+#    Default port 8786. Omit --no-browser and it opens the page.
+#    F5 reloads ui/index.html, ui/app.css, and ui/app.js from disk.
+py -3.14 sessions_page.py serve --port 8786
+
+# Same page, no browser window from this process:
+py -3.14 sessions_page.py serve --port 8786 --no-browser
+
+# 2. Tkinter ledger only. This does not bind a port.
+#    It is not what a double-clicked exe does.
 py -3.14 sessions_page.py desk
 ```
 
-### Step C: Run the Unit Test Suite
-Ensure all 156 hermetic unit tests pass on your machine:
+`py -3.14 sessions_page.py` with no subcommand does not open either window. Argparse requires a command and exits with an error.
+
+### Step C: Run the unit tests
+Run these when you need to. This guide does not claim they pass, and it does not record a count.
 ```powershell
 py -3.14 test_desk.py
 py -3.14 test_sessions_page.py
@@ -86,11 +96,11 @@ Here are the primary areas ready for your inspection and polish:
 
 ## 5. Building a New Executable
 
-Once your UI changes are tested and green:
+Build only after you have run the checks you mean to rely on. Do not treat an old handoff count as a pass.
 ```powershell
 py -3.14 -m PyInstaller --noconfirm --distpath dist_desk sessions_page.spec
 ```
-The compiled standalone binary will be generated at `dist_desk\sessions_page.exe`.
+The binary is `dist_desk\sessions_page.exe`. With no arguments it opens the Full Screen page (`ui/index.html`) as described above. It does not open the Tk desk. Close a running exe before you copy over it. If the old process is still up, the copy fails.
 
 ---
 

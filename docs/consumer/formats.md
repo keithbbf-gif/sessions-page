@@ -2,7 +2,7 @@
 
 This is the format index. The program keeps the same rows in `formats.py` under the name `cmsessions-format-index/1`. It does not walk a store to build this list. The desk Formats button shows each family with its load state and resume line. `sessions_page.exe formats` and `py -3.14 sessions_page.py formats` print the same index. That command takes no flags.
 
-Each family is measured, unmeasured, or absent. Measured means a known transcript can be loaded. Unmeasured means the family is recognized, or counted, but the import stays unread except where the note below says a text file can load. Absent means there is no home, and the count stays null, not zero. Resume is the command shape, or `OPENWORK_FOCUS`, `UNMEASURED`, or `POINTER`. A found program replaces only the first word of a command. Resume does not pass `-p`.
+Each family is measured, unmeasured, or absent. Measured means a known transcript can be loaded. Unmeasured means the family is recognized, or counted, but the import stays unread except where the note below says a text file can load. Absent means there is no home, and the count stays null, not zero. Resume is the command shape, or `OPENWORK_FOCUS`, `UNMEASURED`, or `POINTER` ([formats.py](../../formats.py) `formats.CATALOG`, `formats.catalog`). A found program replaces only the first word of a command ([engine.py](../../engine.py) `engine.resume`; [desk.py](../../desk.py) `desk._argv_with_id`). Resume does not pass `-p` ([engine.py](../../engine.py) `engine.resume`; [desk.py](../../desk.py) `desk._argv_with_id`).
 
 Legal rows are counted and their text is not opened. A file over 48 MB is not loaded. A missing store is null, not zero. One bad store is skipped.
 

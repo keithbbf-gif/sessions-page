@@ -23,11 +23,11 @@ A live census is not one of these scripts. The counts in [consumer/load-and-resu
 What each file is for:
 
 - `test_cli_formats.py` runs the `formats` command and checks the printed index. It does not open the desk and does not bind a port.
-- `test_cosmos_code_hook.py` checks that the hook has no port, that `writes_live` is false, and that the verbs are find, load, resume, and formats. Opening the plug does not bind a socket.
-- `test_desk.py` checks resume plans and the load plan. Importing the desk does not open a window and does not bind a socket.
+- `test_cosmos_code_hook.py` checks that the hook has no port, that `writes_live` is false, and that the verbs are find, load, resume, and formats ([test_cosmos_code_hook.py](../test_cosmos_code_hook.py) `test_cosmos_code_hook.main`; [cosmos_code_hook.py](../cosmos_code_hook.py) `cosmos_code_hook.descriptor`). Opening the plug does not bind a socket.
+- `test_desk.py` checks resume plans and the load plan ([test_desk.py](../test_desk.py) `test_desk.main`; [desk.py](../desk.py) `desk.plan_resume`, `desk.plan_load`). Importing the desk does not open a window and does not bind a socket ([test_desk.py](../test_desk.py) `test_desk.main`; [desk.py](../desk.py) `desk.claim_instance`).
 - `test_formats.py` checks the format-index keys, the harness prefixes, and the extra rows that are not walked. It does not walk a live home.
 - `test_frozen_root.py` checks that a frozen `product_root` and `var` sit beside the exe, and that an unfrozen root stays beside the source.
 - `test_local_names.py` checks local titles, including `aiTitle`, on temporary files. It does not read a live profile.
 - `test_plugin_api.py` checks the in-process plug: `port` null, `window` desk, and the format catalog. It does not start a server.
-- `test_sessions_page.py` checks find, load, import, export, recover, and resume on a temporary fixture, plus the old page on a temporary server. It does not walk a live profile.
+- `test_sessions_page.py` checks find, load, import, export, recover, and resume on a temporary fixture, plus the old page on a temporary server ([test_sessions_page.py](../test_sessions_page.py) `test_sessions_page.main`; [engine.py](../engine.py) `engine.find`, `engine.resume`; [sessions_page.py](../sessions_page.py) `sessions_page._serve`). It does not walk a live profile.
 - `test_store_fixes.py` checks a large-database session cap, Hermes with and without a messages table, a Codex rollout that is still on disk, a missing rollout, a `.jsonl.zst` sibling, OpenWork part text, and Antigravity summary and conversation-db rows. It does not walk a live profile.
