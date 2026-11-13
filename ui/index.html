@@ -239,7 +239,7 @@
     <path fill="#94A3B8" fill-rule="evenodd" d="M 113.73 97.27 L 118.69 97.97 L 118.69 102.03 L 113.73 102.73 L 111.64 107.78 L 114.65 111.78 L 111.78 114.65 L 107.78 111.64 L 102.73 113.73 L 102.03 118.69 L 97.97 118.69 L 97.27 113.73 L 92.22 111.64 L 88.22 114.65 L 85.35 111.78 L 88.36 107.78 L 86.27 102.73 L 81.31 102.03 L 81.31 97.97 L 86.27 97.27 L 88.36 92.22 L 85.35 88.22 L 88.22 85.35 L 92.22 88.36 L 97.27 86.27 L 97.97 81.31 L 102.03 81.31 L 102.73 86.27 L 107.78 88.36 L 111.78 85.35 L 114.65 88.22 L 111.64 92.22 Z M 100 93.7 A 6.30 6.30 0 1 0 100 106.3 A 6.30 6.30 0 1 0 100 93.7 Z"/></svg></i></span>
         </button>
         <span class="text-xs font-bold tracking-tight text-slate-200">CM Sessions</span>
-        <span class="text-[11px] text-slate-500 font-normal">· Multi-Harness Session Store & Trigger Console</span>
+        <span class="text-[11px] text-slate-500 font-normal">· Multi-Harness Session Store &amp; Trigger Console</span>
       </div>
 
       <div class="flex items-center gap-1.5">
@@ -287,7 +287,7 @@
             <line x1="3" y1="9.5" x2="21" y2="9.5"/>
           </svg>
         </button>
-        <button id="topBtnProjects" onclick="setMainMode('projects')" title="Project View — Bracketed & Collapsible by Project"
+        <button id="topBtnProjects" onclick="setMainMode('projects')" title="Project View — Bracketed &amp; Collapsible by Project"
           class="px-2 py-1 rounded border border-[#28334A] bg-[#141924] hover:bg-[#1C2434] text-slate-200 flex items-center justify-center transition">
           <svg viewBox="0 0 24 24" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 6.5 A1.5 1.5 0 0 1 4.5 5 H9.5 L11.5 7.5 H19.5 A1.5 1.5 0 0 1 21 9 V18.5 A1.5 1.5 0 0 1 19.5 20 H4.5 A1.5 1.5 0 0 1 3 18.5 Z"/>
@@ -321,7 +321,7 @@
       <div id="leftTopBar" class="w-72 shrink-0 flex items-end justify-between px-1.5 border-r border-[#243046] bg-[#0A0D14] relative">
         <div class="flex items-end gap-0.5">
           <!-- Col 1 Filter & Sort Tab: Makers (Blacksmith Anvil + ▾ + Sort Toggle) -->
-          <button id="makerBtn" onclick="toggleMakerMenu()" title="Sort & Filter Model Makers (Click to open menu)"
+          <button id="makerBtn" onclick="toggleMakerMenu()" title="Sort &amp; Filter Model Makers (Click to open menu)"
             class="flared-tab !px-1.5 flex items-center gap-0.5 group">
             <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none">
               <!-- Horned Anvil -->
@@ -337,7 +337,7 @@
           </button>
 
           <!-- Col 2 Filter & Sort Tab: Dedicated Harness Icon Tab (Industrial Rigging/Webbing Harness + Sort Toggle) -->
-          <button id="harnessBtn" onclick="toggleMakerMenu()" title="Sort & Filter Harnesses (Click to open menu)"
+          <button id="harnessBtn" onclick="toggleMakerMenu()" title="Sort &amp; Filter Harnesses (Click to open menu)"
             class="flared-tab !px-1.5 flex items-center gap-0.5 group">
             <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none">
               <!-- Rigging harness shoulder straps -->
@@ -357,7 +357,7 @@
           </button>
 
           <!-- Drives Icon Tab (Hard drive / NVMe icon inside a flared tab — NO text) -->
-          <button id="tabDrives" onclick="setLeftScope('drives')" title="Drives — System, Network & Lab Session Stores"
+          <button id="tabDrives" onclick="setLeftScope('drives')" title="Drives — System, Network &amp; Lab Session Stores"
             class="flared-tab !px-2.5">
             <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <path d="M4 13 L6.5 5 H17.5 L20 13"/>
@@ -387,7 +387,7 @@
         <div id="makerMenu" class="hidden absolute left-2 top-10 z-50 w-80 bg-[#0E1422] border-2 border-[#24354F] rounded-xl shadow-2xl p-3 select-none flex flex-col gap-2.5">
           <div class="flex items-center justify-between border-b border-[#1E2B3E] pb-2">
             <div class="flex items-center gap-1.5">
-              <span class="text-xs font-bold text-white uppercase tracking-wider font-mono">Makers & Harnesses</span>
+              <span class="text-xs font-bold text-white uppercase tracking-wider font-mono">Makers &amp; Harnesses</span>
               <span id="makerFilterCountBadge" class="px-1.5 py-0.2 rounded bg-blue-900/60 border border-blue-500/60 text-[10px] font-mono text-blue-300">Active</span>
             </div>
             <button onclick="toggleMakerMenu()" class="text-xs text-slate-400 hover:text-white px-1">✕</button>
@@ -622,7 +622,7 @@
         <div id="drivesContainer" class="hidden flex-1 flex overflow-hidden">
           <div class="w-72 shrink-0 border-r-2 border-[#2E384D] bg-[#151A26] flex flex-col">
             <div class="px-3 py-2.5 border-b border-[#252E40] text-xs font-bold text-[var(--muted-foreground)] uppercase tracking-wider">
-              System, Network & Lab Drives
+              System, Network &amp; Lab Drives
             </div>
             <div id="drivesListHost" class="flex-1 overflow-y-auto p-2 space-y-1"></div>
           </div>
@@ -714,7 +714,7 @@
         </button>
 
         <!-- 5. Hand Off (Cross-Harness Switch / Share Arrow Icon) -->
-        <button onclick="handoffSelected()" title="Hand Off to Another Harness & Model"
+        <button onclick="handoffSelected()" title="Hand Off to Another Harness &amp; Model"
           class="w-9 h-9 rounded-lg border border-blue-500/50 bg-blue-500/10 hover:bg-blue-500/25 flex items-center justify-center text-blue-400">
           <svg viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M7 17L17 7"/>
@@ -756,7 +756,7 @@
       <!-- Main Window Status Bar -->
       <div class="flex-1 flex items-center justify-between px-4 bg-[#0D1017]">
         <div id="statusBarText" class="text-[var(--muted-foreground)] truncate">
-          TABLE VIEW · 14 sessions across 6 makers · Rows aligned 1:1 with Left Sidebar & Right Summary Brackets
+          TABLE VIEW · 14 sessions across 6 makers · Rows aligned 1:1 with Left Sidebar &amp; Right Summary Brackets
         </div>
         <div class="text-[var(--muted-foreground)] shrink-0">
           Estimates only · Token Center optional
@@ -996,9 +996,9 @@
     function escapeHtml(str) {
       if (!str) return '';
       return String(str)
-        .replace(/&/g, '&')
-        .replace(/</g, '<')
-        .replace(/>/g, '>')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
         .replace(/"/g, '"')
         .replace(/'/g, '&#39;');
     }
@@ -1645,9 +1645,9 @@
       } else if (isEos) {
         statusBadgeHTML = `<span class="px-1 py-0.2 rounded bg-[#0A1F18] border border-emerald-600/50 text-[9px] font-mono text-emerald-400 flex items-center gap-0.5 shrink-0" title="Closed with End Session / EoS · Work products saved">✓ EoS</span>`;
       } else if (isSaved) {
-        statusBadgeHTML = `<span class="px-1 py-0.2 rounded bg-[#0A1F18] border border-emerald-600/50 text-[9px] font-mono text-emerald-400 flex items-center gap-0.5 shrink-0" title="Work Products Saved & Committed">💾 Saved</span>`;
+        statusBadgeHTML = `<span class="px-1 py-0.2 rounded bg-[#0A1F18] border border-emerald-600/50 text-[9px] font-mono text-emerald-400 flex items-center gap-0.5 shrink-0" title="Work Products Saved &amp; Committed">💾 Saved</span>`;
       } else if (isTidyUp) {
-        statusBadgeHTML = `<span class="px-1 py-0.2 rounded bg-[#091D28] border border-cyan-500/50 text-[9px] font-mono text-cyan-300 flex items-center gap-0.5 shrink-0" title="TidyUp2 Ran · State Cleaned & Index Synced">✨ TidyUp²</span>`;
+        statusBadgeHTML = `<span class="px-1 py-0.2 rounded bg-[#091D28] border border-cyan-500/50 text-[9px] font-mono text-cyan-300 flex items-center gap-0.5 shrink-0" title="TidyUp2 Ran · State Cleaned &amp; Index Synced">✨ TidyUp²</span>`;
       }
 
       const safeTitle = escapeHtml(s.title);
@@ -2063,7 +2063,7 @@
         <div class="flex flex-wrap items-center gap-2 bg-[var(--card)] p-2.5 rounded border border-[var(--border)] text-xs">
           ${isBreached ? `
             <button onclick="handoffSelected()" class="px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold transition flex items-center gap-1 animate-pulse shadow-md">
-              ↗ Primary Action: Hand Off & Record Child
+              ↗ Primary Action: Hand Off &amp; Record Child
             </button>
             <button onclick="resumeSelected(true)" class="px-2.5 py-1 rounded bg-red-950/40 border border-red-500/60 text-red-300 hover:bg-red-900/50 text-xs font-semibold transition" title="Exceeds 180k ceiling! Surcharge applies.">
               ⚠️ Force Resume in ${m.name} (Override)
@@ -2081,7 +2081,7 @@
               <option>Hermes · Hermes Agent</option>
             </select>
             <button onclick="handoffSelected()" class="px-2.5 py-1 rounded border border-blue-400 text-blue-300 hover:bg-blue-500/20 font-bold transition">
-              ↗ Hand Off & Record Child
+              ↗ Hand Off &amp; Record Child
             </button>
           `}
           <button onclick="repairSelected()" class="px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs transition">
@@ -2107,7 +2107,7 @@
           <div class="bg-[var(--card)] border border-[var(--border)] rounded-lg p-3 flex flex-col justify-between overflow-y-auto">
             <div class="space-y-3">
               <div>
-                <div class="text-xs font-bold text-[var(--muted-foreground)] mb-1 uppercase tracking-wide">Session Summary & Overview</div>
+                <div class="text-xs font-bold text-[var(--muted-foreground)] mb-1 uppercase tracking-wide">Session Summary &amp; Overview</div>
                 <p class="text-xs text-slate-200 leading-relaxed">${escapeHtml(s.summary)}</p>
               </div>
 
@@ -2230,7 +2230,7 @@
             <button onclick="closeTriggerModal()" class="text-slate-400 hover:text-white font-mono text-sm">✕</button>
           </div>
           <div class="text-xs text-slate-300">
-            Attach automated triggers & backdated audits to <strong class="text-cyan-300">ANY event</strong> (Quotas, Sessions, Milestones, Cron, Custom).
+            Attach automated triggers &amp; backdated audits to <strong class="text-cyan-300">ANY event</strong> (Quotas, Sessions, Milestones, Cron, Custom).
           </div>
 
           <!-- Anchor Event Selector (ANY Event!) -->
@@ -2242,7 +2242,7 @@
                 <select id="trigCategory" class="w-full bg-[#131C2D] border border-[#23334D] px-2 py-1 rounded text-white text-xs">
                   <option value="quota" ${anchorCategory === 'quota' ? 'selected' : ''}>[QUOTA] Quota / Credit Expiry</option>
                   <option value="bot_sub" ${anchorCategory === 'bot_sub' ? 'selected' : ''}>[BOT SUB] Bot Subscription (e.g. GrokBot Sub Cancel/Renew)</option>
-                  <option value="burn_dynamics" ${anchorCategory === 'burn_dynamics' ? 'selected' : ''}>[BURN DYN] Token Burn Dynamics (Start >Threshold, Stop/Idle)</option>
+                  <option value="burn_dynamics" ${anchorCategory === 'burn_dynamics' ? 'selected' : ''}>[BURN DYN] Token Burn Dynamics (Start &gt;Threshold, Stop/Idle)</option>
                   <option value="session" ${anchorCategory === 'session' ? 'selected' : ''}>[SESSION] Session Lifecycle (Finish, Crash, Start)</option>
                   <option value="milestone" ${anchorCategory === 'milestone' ? 'selected' : ''}>[MILESTONE] Project Milestone / Deadline</option>
                   <option value="cron" ${anchorCategory === 'cron' ? 'selected' : ''}>[CRON] Scheduled Agent Job (Cron)</option>
@@ -2258,7 +2258,7 @@
 
           <!-- Timing & Offset Mode (Pre, At, Post, or Backdated Lookback) -->
           <div class="flex flex-col gap-1.5 bg-[#090D16] p-3 rounded-lg border border-[#1A2538]">
-            <span class="text-[11px] font-bold text-blue-400 uppercase tracking-wider font-mono">2. Timing & Offset Mode</span>
+            <span class="text-[11px] font-bold text-blue-400 uppercase tracking-wider font-mono">2. Timing &amp; Offset Mode</span>
             <div class="flex items-center gap-2 text-xs text-slate-200">
               <span>Offset:</span>
               <input type="number" id="trigOffsetVal" value="-48" class="w-16 bg-[#131C2D] border border-[#23334D] px-1.5 py-0.5 rounded text-white text-xs font-mono" />
@@ -2283,10 +2283,10 @@
               <select id="trigMetric" class="bg-[#131C2D] border border-[#23334D] px-1.5 py-0.5 rounded text-white text-xs">
                 <option value="always">Always Execute (No Guard)</option>
                 <option value="sub_cancel">Bot Sub Status == CANCELLED / EXPIRED (e.g. GrokBot)</option>
-                <option value="burn_start">Token Burn Velocity > 100k tok/hr</option>
-                <option value="burn_stop">Token Burn Velocity < 1k tok/hr (Idle Reached)</option>
-                <option value="credit">Remaining Credit / Quota > $25.00</option>
-                <option value="tokens">Turn Tokens > 50K</option>
+                <option value="burn_start">Token Burn Velocity &gt; 100k tok/hr</option>
+                <option value="burn_stop">Token Burn Velocity &lt; 1k tok/hr (Idle Reached)</option>
+                <option value="credit">Remaining Credit / Quota &gt; $25.00</option>
+                <option value="tokens">Turn Tokens &gt; 50K</option>
                 <option value="status">Session Status == CRASHED / WRECK</option>
               </select>
             </div>
@@ -2305,11 +2305,11 @@
             </label>
             <label class="flex items-center gap-2 text-xs text-slate-200">
               <input type="checkbox" id="actAudit" checked />
-              <span>Generate Backdated Spend, Token & Sibling Transcript Audit Report (SQLite)</span>
+              <span>Generate Backdated Spend, Token &amp; Sibling Transcript Audit Report (SQLite)</span>
             </label>
             <label class="flex items-center gap-2 text-xs text-slate-200">
               <input type="checkbox" id="actBackup" checked />
-              <span>Snapshot Session Databases (.bak) & Checkpoint WAL</span>
+              <span>Snapshot Session Databases (.bak) &amp; Checkpoint WAL</span>
             </label>
           </div>
 
@@ -2317,7 +2317,7 @@
             <span class="text-[11px] text-slate-400 font-mono">Anchor: Any event in CM Sessions</span>
             <div class="flex items-center gap-2">
               <button onclick="closeTriggerModal()" class="px-3 py-1 rounded bg-[#172030] hover:bg-[#202C42] text-xs text-slate-300">Cancel</button>
-              <button onclick="saveTriggerFromModal()" class="px-3.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white shadow">Save & Arm on Event</button>
+              <button onclick="saveTriggerFromModal()" class="px-3.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white shadow">Save &amp; Arm on Event</button>
             </div>
           </div>
         </div>
