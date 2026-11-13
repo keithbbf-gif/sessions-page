@@ -83,7 +83,7 @@ CATALOG = (
         "title,name,customTitle,summary",
         "agent-transcript jsonl uses the claude turn reader (message.content); meta.json is a header; store.db and state.vscdb have no transcript adapter",
         "measured", "agent --resume <vendor_id>",
-        "Composer query keeps unarchived non-subagent headers and does not read a body. store.db and state.vscdb import raise UNMEASURED. _claude_meta does not read aiTitle. argv[0] may be cursor-agent. Resume does not pass -p.",
+        "Composer query keeps unarchived non-subagent headers and does not read a body. store.db and state.vscdb import raise UNMEASURED. Agent transcripts use the claude header reader, which keeps aiTitle. argv[0] may be cursor-agent. Resume does not pass -p.",
     ),
     _rec(
         "cowork", "cow",
@@ -110,10 +110,10 @@ CATALOG = (
         "first-kilobyte sniff of customTitle, generated_title, title, or summary",
         "CLAUDE_DESKTOP_SESSIONS or %APPDATA%\\Claude\\local-agent-mode-sessions\\*.jsonl",
         "recursive *.jsonl; vendor id is the filename stem",
-        "customTitle,generated_title,title,summary",
+        "aiTitle,customTitle,generated_title,title,summary",
         "jsonl; the claude turn reader uses message.content",
         "measured", "UNMEASURED",
-        "The engine does not launch Claude Desktop. C:\\Users\\Papa\\Claude\\Projects, Artifacts, and Scheduled are places, not session formats.",
+        "A blank title is filled like Claude Code, including aiTitle on an ai-title line. The engine does not launch Claude Desktop. C:\\Users\\Papa\\Claude\\Projects, Artifacts, and Scheduled are places, not session formats.",
     ),
     _rec(
         "gemini", "gem",

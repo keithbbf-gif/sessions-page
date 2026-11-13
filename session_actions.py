@@ -12,8 +12,11 @@ _FONT = ("Segoe UI", -15)
 
 _ACTIONS = (
     ("Load", "_on_load"),
+    ("Preview", "_on_preview"),
     ("Import", "_on_import"),
     ("Export", "_on_export"),
+    ("Index", "_on_index"),
+    ("Formats", "_on_formats"),
     ("Anonymize", "_on_anonymize"),
     ("Check recovery", "_on_recover"),
     ("Restore", "_on_restore"),

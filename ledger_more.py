@@ -11,12 +11,13 @@ _ACCENT = "#7C9CFF"
 _FONT = ("Segoe UI", -15)
 _FONT_MENU = ("Segoe UI", 10)
 
-# Label, desk attribute, arguments. Overview and Formats only explain the ledger.
+# Label, desk attribute, arguments. Overview only explains the ledger.
 _ITEMS = (
     ("Refresh", "_load_all", ()),
+    ("Preview", "_on_preview", ()),
     ("Build index", "_on_index", ()),
     ("Overview info", "_say", ("Drives and locations stay in the ledger filter.", "")),
-    ("Formats", "_say", ("Formats are the source column and the topic column.", "")),
+    ("Formats", "_on_formats", ()),
     ("Load", "_on_load", ()),
     ("Import", "_on_import", ()),
     ("Export", "_on_export", ()),
