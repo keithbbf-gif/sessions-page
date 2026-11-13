@@ -22,7 +22,7 @@ py -3.14 sessions_page.py desk
 
 That calls `desk.main()`. It does not bind a port. On Windows a second `desk` sees `Local\cmSessionsDesk` and shows "Sessions is already open." If tkinter is missing, the window does not open.
 
-`desk` mounts `ledger_master`. That frame is the Table View: top nav, red-ruled heads, the session list, the center, the summary column, the rail, and the sun beside the username. Session, calendar, and project drawings sit in the center. Create summaries does not call a model. A usage figure is an estimate from a token count when the row has one, otherwise from file size divided by 4, using the rates in `ledger_master.py`. It is not a bill. Token Center is not connected.
+`desk` mounts `ledger_master`. That frame is the Table View: top nav, red-ruled heads, the session list, the center, the summary column, the rail, and the sun beside the username. Session, calendar, and project drawings sit in the center. Create summaries does not call a model. A usage figure on the desk is an estimate from a token count when the row has one, otherwise from file size divided by 4, using the rates in `ledger_master.py`. The full-screen page does not invent that split. It shows a dash when the session has no token count. It is not a bill. Token Center status is the Accounts page, and it stays unavailable until a local TokenCTR URL is set.
 
 ## Port 8786
 

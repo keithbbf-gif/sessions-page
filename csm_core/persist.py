@@ -26,11 +26,11 @@ SETTINGS_NAME = "settings.json"
 FIELDS = ("theme", "density", "page_size")
 
 DEFAULT_THEME = "dark"
-DEFAULT_DENSITY = "comfortable"
+DEFAULT_DENSITY = "regular"
 DEFAULT_PAGE_SIZE = 100
 
 THEMES = ("dark", "light", "clam")
-DENSITIES = ("comfortable", "compact", "dense")
+DENSITIES = ("compact", "regular", "comfortable")
 MIN_PAGE_SIZE = 1
 MAX_PAGE_SIZE = 2000
 

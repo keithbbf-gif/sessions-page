@@ -150,7 +150,7 @@ def is_legal(path: str = "", stream: str = "", cwd: str = "", title: str = "") -
     if str(stream or "").lower() == "legal":
         return True
     blob = " ".join(_blob(x) for x in (path, cwd, title))
-    marks = ("\\legal\\", "\\legal", "p:\\legal", "v:\\ai\\legal", "\\abraxas\\")
+    marks = ("\\legal\\", "\\legal", "p:\\legal", "v:\\ai\\legal", "\\abraxas\\", "\\abraxas")
     return any(m in blob for m in marks)
 
 
