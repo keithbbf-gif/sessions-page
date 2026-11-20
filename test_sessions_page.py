@@ -149,6 +149,17 @@ def _refused(op) -> str:
 
 def _case_security(root: Path, homes: dict, check) -> None:
     """Junction escape, late legal marks, catalog scrub, and the CSRF gate."""
+    check("loopback CORS origin is an exact host, not a prefix",
+          lambda: sessions_page._local_page_origin("http://127.0.0.1")
+          and sessions_page._local_page_origin("http://127.0.0.1:8786")
+          and sessions_page._local_page_origin("http://localhost:8786")
+          and sessions_page._local_page_origin("http://[::1]:8786")
+          and not sessions_page._local_page_origin("http://127.0.0.1.evil.example")
+          and not sessions_page._local_page_origin("http://localhost.evil.example")
+          and not sessions_page._local_page_origin("http://127.0.0.1.nip.io")
+          and not sessions_page._local_page_origin("https://127.0.0.1")
+          and not sessions_page._local_page_origin("http://evil.example")
+          and not sessions_page._local_page_origin("http://127.0.0.1@evil.example"))
     links: list[Path] = []
     try:
         outside = root / "outside-store"
@@ -437,6 +448,23 @@ def _case_security(root: Path, homes: dict, check) -> None:
               and all(code == 200 for code, _body in allowed)
               and headless != 403
               and get_code == 200)
+
+        def cors_header(origin, path="/api/verbs"):
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}{path}",
+                headers={"Origin": origin},
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=5) as res:
+                return res.headers.get("Access-Control-Allow-Origin")
+
+        local = f"http://127.0.0.1:{port}"
+        check("CORS does not reflect a loopback-prefix foreign origin",
+              lambda: cors_header(local) == local
+              and cors_header("http://localhost:8786") == "http://localhost:8786"
+              and cors_header("http://127.0.0.1.evil.example") is None
+              and cors_header("http://localhost.evil.example") is None
+              and cors_header("http://127.0.0.1.evil.example", "/") is None)
         try:
             urllib.request.urlopen(
                 f"http://127.0.0.1:{port}/api/shutdown",

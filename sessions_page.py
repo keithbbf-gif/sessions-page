@@ -34,6 +34,7 @@ import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlparse
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
@@ -666,6 +667,30 @@ def _internal_body(exc: BaseException) -> tuple[int, dict]:
     }
 
 
+_LOCAL_PAGE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _local_page_origin(origin: str) -> bool:
+    """True only for this loopback page.
+
+    A prefix match such as startswith('http://127.0.0.1') would also allow
+    http://127.0.0.1.evil.example, which can then read the boot token and
+    transcripts through CORS.
+    """
+    if not isinstance(origin, str) or not origin:
+        return False
+    if any(mark in origin for mark in ("\x00", "\r", "\n", "\\", "@")):
+        return False
+    try:
+        parsed = urlparse(origin)
+    except ValueError:
+        return False
+    if parsed.scheme != "http" or parsed.path not in ("", "/") or parsed.params or parsed.query or parsed.fragment:
+        return False
+    host = (parsed.hostname or "").lower()
+    return host in _LOCAL_PAGE_HOSTS
+
+
 def _inject_token(data: bytes, nonce: str) -> bytes:
     try:
         text = data.decode("utf-8")
@@ -786,7 +811,7 @@ def _serve(port: int, open_browser: bool = False) -> int:
 
         def _cors(self) -> None:
             origin = self.headers.get("Origin") or ""
-            if origin.startswith(("http://127.0.0.1", "http://localhost")):
+            if _local_page_origin(origin):
                 self.send_header("Access-Control-Allow-Origin", origin)
                 self.send_header("Vary", "Origin")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
