@@ -2,7 +2,7 @@
 
 The full-screen page links directly to `/accounts.html` and `/settings.html`. Those files are served from `ui/` by `sessions_page._serve`. The title-bar gear, the gear beside User Name, and the User Name control open those pages. They do not only write a status line.
 
-`/accounts.html` mounts the shared 7-tab `<solaro-account>` component (`ui/solaro-account.js`) via `solaro_core`. The tabs are account, usage, logs, billing, settings, keys, and models. In local mode it posts to `/api/run` and sends `X-CM-Token` when the page has `<meta name="cm-token">`. It does not invent a balance. Nothing on either page signs you in.
+`/accounts.html` mounts the shared 7-tab `<solaro-account>` component (`ui/solaro-account.js`) via `solaro_core`. The tabs are account, usage, logs, billing, settings, keys, and models. In local mode it posts to `/api/run` and sends `X-CM-Token` when the page has `<meta name="cm-token">`. When a credit or balance is unmeasured, `<solaro-account>` shows "—" and the account status fields show "Not reported". It does not invent a balance. Nothing on either page signs you in.
 
 `/settings.html` stores theme, row density, and page size in this browser under the `localStorage` key `cmSessions.settings`. `index.html` reads that key and applies theme, row density, and page size live.
 

@@ -30,9 +30,21 @@
   }
 
   function money(n) {
+    if (n == null || n === "" || typeof n === "boolean") return "—";
     var x = Number(n);
     if (!isFinite(x)) return "—";
     return "$" + x.toFixed(4);
+  }
+
+  function hasUsageNumbers(usage) {
+    if (!usage || typeof usage !== "object") return false;
+    if (Array.isArray(usage.rollup) && usage.rollup.length > 0) return true;
+    var keys = ["free_used_face_usd", "free_quota_face_usd", "credits_face_usd", "used", "measured_usd"];
+    for (var i = 0; i < keys.length; i++) {
+      var val = usage[keys[i]];
+      if (val != null && val !== "" && typeof val !== "boolean" && isFinite(Number(val))) return true;
+    }
+    return false;
   }
 
   function badge(prov) {
@@ -260,13 +272,13 @@
 
   function paintSettings(settings) {
     var auto = (settings && settings.autotopup) || { enabled: AUTO_DEFAULT, cap_usd: 0 };
-    var data = (settings && settings.data_contribution) || { aggregates: true, per_run: false };
+    var data = (settings && settings.data_contribution) || { aggregates: false, per_run: false };
     var enabled = auto.enabled === true;
     return '<p class="muted">Auto-top-up is off unless you opt in with a hard cap.</p>' +
       '<div class="row"><label><input type="checkbox" id="auto"' + (enabled ? " checked" : "") + "> auto-top-up</label>" +
       '<label>cap $<input id="cap" type="number" min="0" step="1" value="' + esc(auto.cap_usd || 0) + '"></label>' +
       '<button type="button" data-action="save-auto">Save</button></div>' +
-      '<div class="row"><label><input type="checkbox" id="agg"' + (data.aggregates !== false ? " checked" : "") + "> share aggregates</label>" +
+      '<div class="row"><label><input type="checkbox" id="agg"' + (data.aggregates === true ? " checked" : "") + "> share aggregates</label>" +
       '<label><input type="checkbox" id="detail"' + (data.per_run === true ? " checked" : "") + "> share per-run detail</label>" +
       '<button type="button" data-action="save-data">Save data</button></div>' +
       '<div class="row"><button type="button" data-action="export-all">Export everything</button></div>' +
@@ -324,7 +336,7 @@
       this._tab = "account";
       this._usage = null;
       this._logs = null;
-      this._settings = { autotopup: { enabled: AUTO_DEFAULT, cap_usd: 0 }, data_contribution: { aggregates: true, per_run: false } };
+      this._settings = { autotopup: { enabled: AUTO_DEFAULT, cap_usd: 0 }, data_contribution: { aggregates: false, per_run: false } };
       this._keyMeta = { present: false, last4: null };
       this._onceKey = "";
       this._board = null;
@@ -439,7 +451,7 @@
       var self = this;
       request(this, "/v1/usage/today").then(function (data) {
         if (self._tab !== "usage") return;
-        if (!data || data._status !== 200) {
+        if (!data || data._status !== 200 || !hasUsageNumbers(data)) {
           self._usage = { _live: false };
           self._view().innerHTML = paintUsage(self._usage);
           return;

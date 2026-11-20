@@ -1,5 +1,18 @@
 # Findings
 
+## Resolution in the current tree
+
+The sections below are the original review of an older snapshot (`V:\A\Ai\sessions-page-teams\security\`). They stay as the audit trail. These items are fixed in this tree and are not open defects:
+
+- Path confinement. `_by_id` accepts a filesystem id only through `_within_homes` in `engine.py`. That requires a real file, not a symlink, under a configured session home.
+- Full legal omit. A row the gate marks legal is refused with `LEGAL_OMITTED` before a transcript body is returned.
+- Boolean launch. `resume` rejects a non-boolean `launch` (`launch must be boolean` in `engine.py`). `apply` on recover is boolean the same way.
+- `to_http`. `Handler.do_POST` and `do_GET` map failures through `csm_core.error_handlers.to_http`. The JSON `message` is the public sentence. The exception class, traceback, and path are not copied.
+- XSS sanitization. `ui/index.html` escapes project, drive, transcript, calendar, and trigger strings with `escapeHtml`, and those clicks use `data-action` listeners instead of inline `onclick` string calls.
+- Per-boot nonce. `_serve` draws `secrets.token_hex(24)` (`sessions_page.py` line 704) and injects `<meta name="cm-token">`. Mutating browser POSTs must send that value as `X-CM-Token`.
+
+Line numbers in the sections below do not match this tree. Current `_launch_gui`, frozen `main`, listen, `_serve`, and `desk.main()` lines are in `SECURITY_REVIEW.md`.
+
 ## BIND
 
 Reviewed `V:\A\Ai\sessions-page-teams\security\sessions_page.py` only. No product code was edited. The server was not started.

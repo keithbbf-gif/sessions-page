@@ -1270,6 +1270,7 @@
       const heights = { compact: 26, regular: 34, comfortable: 44 };
       ROW_H = heights[UI_SETTINGS.rowDensity] || 34;
       root.style.setProperty('--row-h', ROW_H + 'px');
+      const lightVars = ['--background', '--card', '--sidebar', '--border', '--foreground', '--muted-foreground', '--accent'];
       if (UI_SETTINGS.theme === 'light') {
         root.style.setProperty('--background', '#f6f3ec');
         root.style.setProperty('--card', '#fffdf8');
@@ -1278,6 +1279,8 @@
         root.style.setProperty('--foreground', '#1c1915');
         root.style.setProperty('--muted-foreground', '#5c5348');
         root.style.setProperty('--accent', '#e7dfd2');
+      } else {
+        lightVars.forEach(name => root.style.removeProperty(name));
       }
     }
 
@@ -2080,10 +2083,11 @@
         const allProjects = discovered.length > 0 ? discovered : ['cmSessions', 'harness_repo', 'COSMOS', 'TokenCenter'];
         document.getElementById('projectFilterChips').innerHTML = allProjects.map(p => {
           const on = state.selectedProjects.has(p);
+          const safeProj = escapeHtml(p);
           return `
-            <button onclick="toggleProjectSelect('${p}')"
+            <button type="button" data-action="toggle-proj-select" data-proj="${safeProj}"
               class="px-2 py-0.5 rounded border text-xs font-semibold ${on ? 'border-blue-400 bg-blue-500/20 text-blue-200' : 'border-[#242E42] opacity-50'}">
-              ${on ? '✓ ' : ''}${p}
+              ${on ? '✓ ' : ''}${safeProj}
             </button>
           `;
         }).join('');
@@ -2094,23 +2098,26 @@
           const projRows = rows.filter(r => r.proj === proj);
           const expanded = state.expandedProjects.has(proj);
           const leftW = state.leftCollapsed ? 'hidden' : 'w-72 shrink-0';
+          const safeProj = escapeHtml(proj);
+          const safeCount = escapeHtml(String(projRows.length));
+          const makerNames = [...new Set(projRows.map(x => (MAKERS[x.maker] && MAKERS[x.maker].name) || x.maker || ''))].join(', ');
           html += `
-            <div onclick="toggleProjectExpand('${proj}')" style="height:${ROW_H}px"
+            <div data-action="toggle-proj-expand" data-proj="${safeProj}" style="height:${ROW_H}px"
               class="flex items-stretch cursor-pointer font-bold text-xs">
               <div class="${leftW} flex items-center px-1.5 border-r border-[#263044] bg-[#121620]">
                 <div class="w-full rounded-md bg-[#181F2E] border border-[#28334A] flex items-stretch" style="height:${Math.max(18, ROW_H - 6)}px">
                   <div class="w-9 shrink-0 border-r border-[#242D40] flex items-center justify-center text-blue-400">
                     ${expanded ? '▾' : '▸'} 📁
                   </div>
-                  <div class="flex-1 px-2 flex items-center justify-between">
-                    <span class="text-blue-300 text-[13.5px] truncate">${proj}</span>
-                    <span class="font-mono text-[11px] text-slate-400">${projRows.length}</span>
+                  <div class="flex-1 px-2 flex items-center justify-between min-w-0">
+                    <span class="text-blue-300 text-[13.5px] truncate">${safeProj}</span>
+                    <span class="font-mono text-[11px] text-slate-400">${safeCount}</span>
                   </div>
                 </div>
               </div>
-              <div class="flex-1 flex items-center justify-between px-3 text-[13.5px] bg-[#121722] hover:bg-[#181F2E] border-b border-[#1E2636]">
-                <span>Project Bracket: <b class="text-white">${proj}</b> <span class="text-slate-400 font-normal">(${expanded ? 'Expanded' : 'Collapsed — click to expand'})</span></span>
-                <span class="font-mono text-xs text-slate-400">Makers: ${[...new Set(projRows.map(x => MAKERS[x.maker].name))].join(', ')}</span>
+              <div class="flex-1 flex items-center justify-between px-3 text-[13.5px] bg-[#121722] hover:bg-[#181F2E] border-b border-[#1E2636] min-w-0">
+                <span class="truncate">Project Bracket: <b class="text-white">${safeProj}</b> <span class="text-slate-400 font-normal">(${expanded ? 'Expanded' : 'Collapsed — click to expand'})</span></span>
+                <span class="font-mono text-xs text-slate-400 truncate">Makers: ${escapeHtml(makerNames)}</span>
               </div>
             </div>
           `;
@@ -2120,8 +2127,8 @@
           const blockRows = 1 + (expanded ? projRows.length : 0);
           bracketHtml += `
             <div style="height:${blockRows * ROW_H - 6}px" class="p-2.5 rounded-lg bg-[#141924] border border-[#222B3D] border-l-4 border-l-blue-400 flex flex-col justify-between overflow-hidden text-xs">
-              <div class="font-bold text-blue-300 truncate">${proj}</div>
-              <div class="text-slate-300 truncate">${projRows.length} sessions in project</div>
+              <div class="font-bold text-blue-300 truncate">${safeProj}</div>
+              <div class="text-slate-300 truncate">${safeCount} sessions in project</div>
               <div class="text-slate-500 font-mono text-[11px]">${expanded ? 'Showing all rows' : 'Collapsed'}</div>
             </div>
           `;
@@ -2202,13 +2209,13 @@
       listHost.innerHTML = DRIVES.map(d => {
         const active = d.id === state.activeDriveId;
         return `
-          <div onclick="selectDrive('${d.id}')"
+          <div data-action="select-drive" data-id="${escapeHtml(d.id)}"
             class="px-2.5 py-2.5 cursor-pointer hover:bg-[var(--accent)] ${active ? 'bg-[var(--accent)] font-bold' : ''}">
             <div class="flex items-center justify-between text-xs">
-              <span>💾 ${d.name}</span>
-              <span class="font-mono text-[var(--muted-foreground)]">${d.free}</span>
+              <span>💾 ${escapeHtml(d.name)}</span>
+              <span class="font-mono text-[var(--muted-foreground)]">${escapeHtml(d.free)}</span>
             </div>
-            <div class="text-xs text-[var(--muted-foreground)]">${d.kind} · ${d.folders.length} session folders</div>
+            <div class="text-xs text-[var(--muted-foreground)]">${escapeHtml(d.kind)} · ${escapeHtml(String(d.folders.length))} session folders</div>
           </div>
         `;
       }).join('');
@@ -2218,24 +2225,24 @@
         `Session Folders on ${drive.name} (${drive.kind})`;
 
       document.getElementById('driveFolderCards').innerHTML = drive.folders.map(f => {
-        const m = MAKERS[f.maker];
+        const m = MAKERS[f.maker] || MAKERS.claude;
+        const safePath = escapeHtml(f.path);
         return `
-          <div ondblclick="openDriveFolder('${f.path.replace(/\\/g, '\\\\')}')"
-            onclick="flash('Selected folder ${f.path} — Double-click card to open folder')"
-            class="p-3.5 rounded-lg border-2 border-[var(--border)] bg-[var(--card)] hover:border-blue-400 cursor-pointer flex flex-col justify-between gap-2">
-            <div>
+          <div data-action="select-drive-folder" data-dbl-action="open-drive-folder" data-path="${safePath}"
+            class="p-3.5 rounded-lg border-2 border-[var(--border)] bg-[var(--card)] hover:border-blue-400 cursor-pointer flex flex-col justify-between gap-2 min-w-0">
+            <div class="min-w-0">
               <div class="flex items-center justify-between gap-2 mb-1.5">
-                <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2 min-w-0">
                   ${makerBadgeHTML(f.maker, 'md')}
-                  <span class="text-xs font-bold ${m.text}">${m.fullName}</span>
+                  <span class="text-xs font-bold ${m.text || ''}">${escapeHtml(m.fullName)}</span>
                 </div>
-                <span class="text-xs font-mono text-emerald-300 shrink-0">${f.count} sessions</span>
+                <span class="text-xs font-mono text-emerald-300 shrink-0">${escapeHtml(String(f.count))} sessions</span>
               </div>
-              <div class="text-xs font-mono font-bold break-all text-[var(--foreground)]">📂 ${f.path}</div>
+              <div class="text-xs font-mono font-bold break-all text-[var(--foreground)]">📂 ${safePath}</div>
             </div>
-            <div class="text-xs text-[var(--muted-foreground)]">${f.note}</div>
+            <div class="text-xs text-[var(--muted-foreground)]">${escapeHtml(f.note)}</div>
             <div class="pt-1.5 border-t border-[var(--border)] flex items-center justify-between text-xs text-[var(--muted-foreground)]">
-              <span>Size: ${f.size}</span>
+              <span>Size: ${escapeHtml(f.size)}</span>
               <span class="text-blue-400 font-semibold">Double-click to open ↗</span>
             </div>
           </div>
@@ -2318,7 +2325,7 @@
               let cardBg = 'bg-[#0E1624] border-blue-500/40 text-blue-100';
               let badgeStyle = 'color: #93C5FD; font-weight: 700;';
               if (isAsst) {
-                roleTitle = `${m.fullName} (${s.model})`;
+                roleTitle = `${m.fullName} (${s.model || ''})`;
                 cardBg = 'bg-[#121824] border-[#222E42] text-slate-200';
                 badgeStyle = `color: ${m.color || '#60A5FA'}; font-weight: 700;`;
               } else if (isTool) {
@@ -2332,15 +2339,17 @@
               }
 
               const safeText = escapeHtml(t.text || t.content || '');
+              const safeRole = escapeHtml(roleTitle);
+              const safeSeq = escapeHtml(t.seq || '');
               return `
-                <div class="p-3 rounded-lg border ${cardBg} space-y-1.5 shadow-sm">
-                  <div class="flex items-center justify-between text-xs pb-1 border-b border-white/5">
-                    <span style="${badgeStyle}" class="text-[12px] flex items-center gap-1.5">
-                      ${isUser ? '👤' : (isAsst ? '🤖' : (isTool ? '⚙️' : 'ℹ️'))} ${roleTitle}
+                <div class="p-3 rounded-lg border ${cardBg} space-y-1.5 shadow-sm min-w-0 max-w-full">
+                  <div class="flex items-center justify-between text-xs pb-1 border-b border-white/5 min-w-0">
+                    <span style="${badgeStyle}" class="text-[12px] flex items-center gap-1.5 min-w-0">
+                      ${isUser ? '👤' : (isAsst ? '🤖' : (isTool ? '⚙️' : 'ℹ️'))} ${safeRole}
                     </span>
-                    <span class="text-[10px] font-mono text-slate-500">Turn #${t.seq || ''}</span>
+                    <span class="text-[10px] font-mono text-slate-500 shrink-0">Turn #${safeSeq}</span>
                   </div>
-                  <div class="text-xs whitespace-pre-wrap leading-relaxed select-text font-sans font-normal">${safeText}</div>
+                  <div class="turn-body min-w-0 break-words text-xs whitespace-pre-wrap leading-relaxed select-text font-sans font-normal" style="overflow-wrap:anywhere;word-break:break-word;">${safeText}</div>
                 </div>
               `;
             }).join('')}
@@ -2372,7 +2381,7 @@
         } else if (rawTokens >= triggerLimit) {
           isTriggered = true;
           gaugeColor = 'bg-amber-500';
-          statusText = `⚠️ 170k Resession Trigger! Exploratory work stopped; handoff child`;
+          statusText = `170k+ Resession Trigger — Recommend Hand Off before 180k ceiling.`;
         } else {
           statusText = `${pct}% · Safe (Canon ceiling: 170k trigger / 180k stop)`;
         }
@@ -2440,7 +2449,7 @@
 
         <div class="grid grid-cols-2 gap-3 flex-1 min-h-0">
           <!-- Left: Transcript Container -->
-          <div class="bg-[var(--card)] border border-[var(--border)] rounded-lg p-3 flex flex-col overflow-y-auto">
+          <div class="bg-[var(--card)] border border-[var(--border)] rounded-lg p-3 flex flex-col overflow-y-auto overflow-x-hidden min-w-0">
             ${transcriptHtml}
           </div>
 
@@ -2539,10 +2548,10 @@
       const el = document.getElementById("calChipTitle_" + id);
       if (!el) return;
       const cur = el.innerText;
-      el.outerHTML = `<input id="inlineInput_${id}" type="text" value="${cur}"
-        onblur="saveSessionTitle('${id}', this.value)"
-        onkeydown="if(event.key==='Enter') saveSessionTitle('${id}', this.value); if(event.key==='Escape') renderCalendarView();"
-        class="bg-[#0E1624] border border-blue-400 text-white text-xs px-1 py-0.5 rounded outline-none w-full" autofocus />`;
+      const safeId = escapeHtml(id);
+      el.outerHTML = `<input id="inlineInput_${safeId}" type="text" value="${escapeHtml(cur)}"
+        data-action="save-session-title" data-id="${safeId}"
+        class="bg-[#0E1624] border border-blue-400 text-white text-xs px-1 py-0.5 rounded outline-none w-full" />`;
       const inp = document.getElementById("inlineInput_" + id);
       if (inp) { inp.focus(); inp.select(); }
     }
@@ -2614,7 +2623,7 @@
               </div>
               <div>
                 <label class="text-[10px] text-slate-400 block mb-0.5">Event Target / Name</label>
-                <input id="trigAnchorName" type="text" value="${anchorName}" class="w-full bg-[#131C2D] border border-[#23334D] px-2 py-1 rounded text-white text-xs font-mono" />
+                <input id="trigAnchorName" type="text" value="${escapeHtml(anchorName)}" class="w-full bg-[#131C2D] border border-[#23334D] px-2 py-1 rounded text-white text-xs font-mono" />
               </div>
             </div>
           </div>
@@ -2680,7 +2689,7 @@
             <span class="text-[11px] text-slate-400 font-mono">Anchor: Any event in CM Sessions</span>
             <div class="flex items-center gap-2">
               <button onclick="closeTriggerModal()" class="px-3 py-1 rounded bg-[#172030] hover:bg-[#202C42] text-xs text-slate-300">Cancel</button>
-              <button onclick="saveTriggerFromModal()" class="px-3.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white shadow">Save &amp; Arm on Event</button>
+              <button type="button" data-action="save-trigger" data-anchor="${escapeHtml(anchorName)}" class="px-3.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white shadow">Save &amp; Arm on Event</button>
             </div>
           </div>
         </div>
@@ -2822,18 +2831,20 @@
     }
 
     function renderCalendarLeftPane(dayNum) {
+      const now = new Date();
+      const isToday = now.getFullYear() === state.calendarYear && now.getMonth() === state.calendarMonth && dayNum === now.getDate();
       const dayData = CALENDAR_DAYS_DATA[dayNum] || {
-        num: dayNum, curr: true, today: dayNum === 8, heat: 1, cost: "$0.00", hours: "0h",
-        summary: "Standby / Idle", makers: [], sessions: [], events: []
+        num: dayNum, curr: true, today: isToday, heat: 0, cost: "—", hours: "—",
+        summary: "—", makers: [], sessions: [], events: []
       };
+      const noSessions = !dayData.sessions || dayData.sessions.length === 0;
+      const dayHours = noSessions ? "—" : (dayData.hours || "—");
+      const dayCost = noSessions ? "—" : (dayData.cost || "—");
+      const daySummary = noSessions ? "—" : (dayData.summary || "—");
 
       const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
       const viewed = new Date(state.calendarYear, state.calendarMonth, dayNum);
       const dow = dayNames[viewed.getDay()];
-      const todayDate = new Date();
-      const isToday = viewed.getFullYear() === todayDate.getFullYear()
-        && viewed.getMonth() === todayDate.getMonth()
-        && viewed.getDate() === todayDate.getDate();
 
       // Timeline Visual Bar (08:00 to 20:00 = 12 hours)
       const timelineSegments = (dayData.sessions || []).map(s => {
@@ -2846,11 +2857,12 @@
         const leftPct = Math.max(0, Math.min(100, ((startH - 8) / 12.0) * 100));
         const widthPct = Math.max(3, Math.min(100 - leftPct, ((stopH - startH) / 12.0) * 100));
         const m = MAKERS[s.maker] || MAKERS.claude;
+        const tip = escapeHtml(`${s.startTime || ''} - ${s.stopTime || ''} (${s.duration || ''}): ${s.title || ''}`);
         return `
           <div class="absolute top-1 bottom-1 rounded-[3px] shadow-sm flex items-center justify-center text-[9px] font-bold font-mono overflow-hidden"
                style="left:${leftPct}%; width:${widthPct}%; background:${m.color || '#60A5FA'}; color:#070A10;"
-               title="${s.startTime} - ${s.stopTime} (${s.duration}): ${s.title}">
-            ${s.hr || s.maker}
+               title="${tip}">
+            ${escapeHtml(s.hr || s.maker || '')}
           </div>
         `;
       }).join("");
@@ -2868,24 +2880,24 @@
                   <circle cx="12" cy="12" r="10" stroke-width="2"/>
                   <polyline points="12 6 12 12 16 14" stroke-width="2"/>
                 </svg>
-                <span>${s.startTime} – ${s.stopTime}</span>
+                <span>${escapeHtml(s.startTime)} – ${escapeHtml(s.stopTime)}</span>
               </div>
-              <span class="px-1.5 py-0.5 rounded bg-[#162238] border border-[#233552] text-[10.5px] font-mono text-blue-300 font-semibold">${s.duration}</span>
+              <span class="px-1.5 py-0.5 rounded bg-[#162238] border border-[#233552] text-[10.5px] font-mono text-blue-300 font-semibold">${escapeHtml(s.duration)}</span>
             </div>
 
             <!-- Bullet & Session Info -->
             <div class="flex items-start gap-2 pt-0.5">
               ${miniMakerBulletHTML(s.maker)}
               <div class="flex-1 min-w-0">
-                <div id="calChipTitle_${s.id}" ondblclick="event.stopPropagation(); inlineEditSessionTitle('${escapeJs(s.id)}')" class="text-xs font-semibold text-slate-100 truncate group-hover:text-blue-300 transition-colors">${escapeHtml(s.title)}</div>
+                <div id="calChipTitle_${escapeHtml(s.id)}" data-action="edit-cal-title" data-id="${escapeHtml(s.id)}" class="text-xs font-semibold text-slate-100 truncate group-hover:text-blue-300 transition-colors">${escapeHtml(s.title)}</div>
                 <div class="flex items-center gap-1.5 text-[10.5px] text-slate-400 mt-1 font-mono flex-wrap">
-                  <span class="text-xs font-bold" style="color:${m.color}">${s.model}</span>
+                  <span class="text-xs font-bold" style="color:${m.color}">${escapeHtml(s.model)}</span>
                   <span class="text-slate-600">·</span>
-                  <span class="px-1 rounded bg-[#141C2B] text-slate-300 font-medium">${s.proj}</span>
+                  <span class="px-1 rounded bg-[#141C2B] text-slate-300 font-medium">${escapeHtml(s.proj)}</span>
                   <span class="text-slate-600">·</span>
-                  <span class="text-slate-300">${s.tokens}</span>
+                  <span class="text-slate-300">${escapeHtml(s.tokens)}</span>
                   <span class="text-slate-600">·</span>
-                  <span class="text-emerald-400 font-bold">${s.cost}</span>
+                  <span class="text-emerald-400 font-bold">${escapeHtml(s.cost)}</span>
                 </div>
               </div>
             </div>
@@ -2902,7 +2914,7 @@
           <span class="text-[10px] font-bold uppercase tracking-wider text-amber-400 font-mono">Scheduled Events & Crons</span>
           ${dayData.events.map(ev => `
             <div class="px-2 py-1 rounded bg-[#1C170E] border border-amber-600/60 text-[11px] text-amber-300 font-medium flex items-center justify-between">
-              <span>${ev}</span>
+              <span>${escapeHtml(ev)}</span>
             </div>
           `).join("")}
         </div>
@@ -2930,15 +2942,15 @@
           <div class="p-2.5 rounded-lg bg-[#0E1524] border border-[#1F304B] flex flex-col gap-1.5 shadow-sm">
             <div class="flex items-center justify-between">
               <span class="text-xs font-semibold text-slate-300">Total Active Time</span>
-              <span class="text-sm font-mono font-bold text-cyan-300">${dayData.hours}</span>
+              <span class="text-sm font-mono font-bold text-cyan-300">${escapeHtml(dayHours)}</span>
             </div>
             <div class="flex items-center justify-between text-xs text-slate-400">
               <span>Daily Spend & Tokens</span>
-              <span class="font-mono text-emerald-400 font-bold">${dayData.cost}</span>
+              <span class="font-mono text-emerald-400 font-bold">${escapeHtml(dayCost)}</span>
             </div>
             <div class="flex items-center justify-between text-xs text-slate-400">
               <span>Summary</span>
-              <span class="text-slate-200 font-semibold truncate max-w-[170px]" title="${dayData.summary}">${dayData.summary}</span>
+              <span class="text-slate-200 font-semibold truncate max-w-[170px]" title="${escapeHtml(daySummary)}">${escapeHtml(daySummary)}</span>
             </div>
           </div>
 
@@ -2978,7 +2990,7 @@
           ${eventsHtml}
 
           <!-- Jump to Week View Button -->
-          <button onclick="openWeekView(${dayNum})"
+          <button type="button" data-action="open-week" data-day="${escapeHtml(String(dayNum))}"
                   class="w-full py-1.5 px-3 rounded-lg bg-[#14223A] hover:bg-[#1C3052] border border-blue-500/80 text-blue-200 text-xs font-semibold flex items-center justify-center gap-1.5 shadow transition">
             <span>📆 Focus Week of ${monthShort(state.calendarMonth)} ${dayNum} →</span>
           </button>
@@ -3038,27 +3050,30 @@
           return `<span class="w-2.5 h-2.5 rounded-full inline-block shadow-sm" style="background:${m.color || '#60A5FA'}; border:1px solid ${m.outline || m.color};" title="${m.fullName}"></span>`;
         }).join("");
 
-        const clickHandler = cell.curr ? `onclick="selectCalendarDay(${cell.num})" ondblclick="openWeekView(${cell.num})"` : "";
+        const dayAttrs = cell.curr ? `data-action="cal-day" data-day="${escapeHtml(String(cell.num))}"` : "";
+        const cellSummary = escapeHtml(cell.summary || (cell.curr ? "—" : ""));
+        const cellHours = escapeHtml(cell.hours || (cell.curr ? "—" : ""));
+        const cellCost = escapeHtml(cell.cost || (cell.curr ? "—" : ""));
 
         return `
-          <div ${clickHandler}
+          <div ${dayAttrs}
                class="p-2.5 rounded-lg border ${cellBorder} ${cellBg} flex flex-col justify-between overflow-hidden cursor-pointer transition-all select-none group min-h-[155px]"
                title="${cell.curr ? 'Click: Inspect Hourly Breakdown in Left Pane\nDouble-Click: Open Week View with Focus on this Day' : ''}">
             <!-- Top Row: Day Number + Hours / Cost -->
             <div class="flex items-center justify-between pb-1.5 border-b border-[#182336]/60">
               <div class="flex items-center gap-1.5">
-                <span class="${numCls} text-sm font-mono">${cell.num}</span>
+                <span class="${numCls} text-sm font-mono">${escapeHtml(String(cell.num))}</span>
                 ${isToday ? '<span class="text-[9.5px] font-bold text-blue-400">TODAY</span>' : ''}
               </div>
               <div class="flex items-center gap-1.5">
-                <span class="text-[11px] font-mono font-semibold text-slate-300">${cell.hours || ''}</span>
-                <span class="text-[10px] font-mono px-1 py-0.2 rounded bg-[#0D1522] text-slate-400 border border-[#1A263A]">${cell.cost || ''}</span>
+                <span class="text-[11px] font-mono font-semibold text-slate-300">${cellHours}</span>
+                <span class="text-[10px] font-mono px-1 py-0.2 rounded bg-[#0D1522] text-slate-400 border border-[#1A263A]">${cellCost}</span>
               </div>
             </div>
 
             <!-- Middle Row: Clean Short Few-Word Summary Pill -->
             <div class="my-auto py-2.5 px-3 rounded-md bg-[#121927]/90 border border-[#202F47]/70 text-center shadow-inner group-hover:border-blue-400/60 transition-colors">
-              <span class="text-xs font-semibold text-slate-100 tracking-wide block truncate">${cell.summary}</span>
+              <span class="text-xs font-semibold text-slate-100 tracking-wide block truncate">${cellSummary}</span>
             </div>
 
             <!-- Bottom Row: Model Maker Bullets + Sub-Hint -->
@@ -3127,18 +3142,18 @@
         const sessionCards = (dayData.sessions || []).map(s => {
           const m = MAKERS[s.maker] || MAKERS.claude;
           return `
-            <div class="p-2 rounded bg-[#101726] border border-[#1E2E48] flex flex-col gap-1">
+            <div class="p-2 rounded bg-[#101726] border border-[#1E2E48] flex flex-col gap-1 min-w-0">
               <div class="flex items-center justify-between text-[11px] font-mono text-cyan-300 font-bold">
-                <span>${s.startTime} – ${s.stopTime}</span>
-                <span class="text-blue-300 font-normal">(${s.duration})</span>
+                <span>${escapeHtml(s.startTime)} – ${escapeHtml(s.stopTime)}</span>
+                <span class="text-blue-300 font-normal">(${escapeHtml(s.duration)})</span>
               </div>
-              <div class="flex items-center gap-1.5 pt-0.5">
+              <div class="flex items-center gap-1.5 pt-0.5 min-w-0">
                 ${miniMakerBulletHTML(s.maker)}
-                <span class="text-xs font-semibold text-slate-100 truncate">${s.title}</span>
+                <span class="text-xs font-semibold text-slate-100 truncate">${escapeHtml(s.title)}</span>
               </div>
-              <div class="text-[10px] font-mono text-slate-400 flex items-center justify-between">
-                <span style="color:${m.color}">${s.model}</span>
-                <span class="text-emerald-400 font-bold">${s.cost}</span>
+              <div class="text-[10px] font-mono text-slate-400 flex items-center justify-between gap-2">
+                <span class="truncate" style="color:${m.color}">${escapeHtml(s.model)}</span>
+                <span class="text-emerald-400 font-bold shrink-0">${escapeHtml(s.cost)}</span>
               </div>
             </div>
           `;
@@ -3146,13 +3161,16 @@
 
         const eventsBadges = (dayData.events || []).map(ev => `
           <div class="px-2 py-0.5 rounded bg-amber-950/80 border border-amber-500/60 text-[10px] text-amber-300 truncate">
-            ${ev}
+            ${escapeHtml(typeof ev === 'string' ? ev : (ev && (ev.name || ev.eventName)) || '')}
           </div>
         `).join("");
 
+        const weekSummary = escapeHtml(dayData.summary || (dayData.sessions && dayData.sessions.length ? "" : "—"));
+        const weekHours = escapeHtml(dayData.hours || "—");
+
         return `
-          <div onclick="setCalendarDate(${wd.year}, ${wd.month}, ${wd.num})"
-               class="flex-1 flex flex-col rounded-xl border ${colCls} p-3 gap-2.5 overflow-hidden transition-all cursor-pointer">
+          <div data-action="cal-week-day" data-year="${escapeHtml(String(wd.year))}" data-month="${escapeHtml(String(wd.month))}" data-day="${escapeHtml(String(wd.num))}"
+               class="flex-1 flex flex-col rounded-xl border ${colCls} p-3 gap-2.5 overflow-hidden transition-all cursor-pointer min-w-0">
             <!-- Day Column Header -->
             <div class="flex flex-col gap-1 pb-2 border-b border-[#1C283E]">
               <div class="flex items-center justify-between">
@@ -3161,13 +3179,13 @@
               </div>
               <div class="flex items-baseline justify-between">
                 <span class="text-2xl font-bold font-mono ${(function(){ const t = new Date(); return wd.year === t.getFullYear() && wd.month === t.getMonth() && wd.num === t.getDate(); })() ? 'text-blue-400' : 'text-white'}">${monthShort(wd.month)} ${wd.num}</span>
-                <span class="text-xs font-mono font-bold text-cyan-300">${dayData.hours}</span>
+                <span class="text-xs font-mono font-bold text-cyan-300">${weekHours}</span>
               </div>
             </div>
 
             <!-- Short Summary Capsule -->
             <div class="py-1.5 px-2.5 rounded-lg bg-[#121A2A] border border-[#233550] text-center">
-              <span class="text-xs font-semibold text-slate-200 truncate block">${dayData.summary}</span>
+              <span class="text-xs font-semibold text-slate-200 truncate block">${weekSummary}</span>
             </div>
 
             <!-- Hourly Session Breakdown Cards -->
@@ -3587,13 +3605,12 @@ function updateUI() {
     async function resumeSelected(forced = false) {
       const s = SESSIONS.find(x => x.id === state.selectedId) || SESSIONS[0];
       if (!s) return;
-      const m = MAKERS[s.maker] || MAKERS.claude;
       const tok = parseTokenCount(s);
-      if (s.maker === 'grok' && tok && tok >= 180000 && !forced) {
-        if (!confirm(`⚠️ CANON WARNING: Session "${s.title}" has reached ${s.tokens} tokens (>= 180,000 hard ceiling).\n\nResuming exploratory work will trigger the 2x SuperGrok context surcharge!\n\nAre you sure you want to override and resume instead of handing off to a child session?`)) {
-          return;
-        }
+      if (s.maker === 'grok' && tok != null && tok >= 180000) {
+        const warned = window.confirm(`⚠️ CANON WARNING: Session "${s.title}" has reached ${s.tokens} tokens (>= 180,000 hard ceiling).\n\nResuming exploratory work will trigger the 2x SuperGrok context surcharge!\n\nAre you sure you want to override and resume instead of handing off to a child session?`);
+        if (!warned) return;
       }
+      void forced;
       flash(`Launching resume for "${s.title}"...`);
       try {
         const res = await runApi('resume', { id: s.id, launch: true });
@@ -3696,6 +3713,78 @@ function updateUI() {
         root.style.zoom = '1';
       }
     }
+
+    function delegatedActionEl(event) {
+      const node = event.target;
+      if (!node || typeof node.closest !== 'function') return null;
+      return node.closest('[data-action]');
+    }
+
+    document.addEventListener('click', (event) => {
+      const el = delegatedActionEl(event);
+      if (!el) return;
+      const action = el.dataset.action;
+      if (action === 'toggle-proj-select') {
+        toggleProjectSelect(el.dataset.proj || '');
+      } else if (action === 'toggle-proj-expand') {
+        toggleProjectExpand(el.dataset.proj || '');
+      } else if (action === 'select-drive') {
+        selectDrive(el.dataset.id || '');
+      } else if (action === 'select-drive-folder') {
+        flash('Selected folder ' + (el.dataset.path || '') + ' — Double-click card to open folder');
+      } else if (action === 'open-drive-folder') {
+        openDriveFolder(el.dataset.path || '');
+      } else if (action === 'cal-day') {
+        const day = Number(el.dataset.day);
+        if (day) selectCalendarDay(day);
+      } else if (action === 'cal-week-day') {
+        setCalendarDate(Number(el.dataset.year), Number(el.dataset.month), Number(el.dataset.day));
+      } else if (action === 'open-week') {
+        const day = Number(el.dataset.day);
+        if (day) openWeekView(day);
+      } else if (action === 'save-trigger') {
+        saveTriggerFromModal(el.dataset.anchor || '');
+      }
+    });
+
+    document.addEventListener('dblclick', (event) => {
+      const node = event.target;
+      if (!node || typeof node.closest !== 'function') return;
+      const openEl = node.closest('[data-dbl-action="open-drive-folder"], [data-action="open-drive-folder"]');
+      if (openEl && openEl.dataset.path) {
+        openDriveFolder(openEl.dataset.path);
+        return;
+      }
+      const el = node.closest('[data-action]');
+      if (!el) return;
+      const action = el.dataset.action;
+      if (action === 'edit-cal-title') {
+        event.stopPropagation();
+        inlineEditSessionTitle(el.dataset.id || '');
+      } else if (action === 'cal-day') {
+        const day = Number(el.dataset.day);
+        if (day) openWeekView(day);
+      }
+    });
+
+    document.addEventListener('focusout', (event) => {
+      const el = event.target;
+      if (!el || !el.dataset || el.dataset.action !== 'save-session-title') return;
+      saveSessionTitle(el.dataset.id || '', el.value);
+    });
+
+    document.addEventListener('keydown', (event) => {
+      const el = event.target;
+      if (!el || !el.dataset || el.dataset.action !== 'save-session-title') return;
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        saveSessionTitle(el.dataset.id || '', el.value);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        el.dataset.action = '';
+        renderCalendarView();
+      }
+    });
 
     window.addEventListener('resize', applyDesktopScale);
     document.addEventListener('fullscreenchange', applyDesktopScale);

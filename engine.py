@@ -30,10 +30,12 @@ MAX_BYTES = 48 * 1024 * 1024
 SESSION_CAP = 2000
 SUMMARY_CAP = 4000
 HEAD_BYTES = 8192
-# Same window preview already treats as "the whole small file", so a legal
-# marker past the 8KB header cannot survive an open.
+# Open sniffs this much of a plain transcript. A marker past this window is
+# refused when preview or load reads the body.
 _LEGAL_SCAN = 512 * 1024
-_ZSTD_SCAN = 256 * 1024
+# Decompressed prefix for a zstd sniff. The reader streams, so a frame
+# boundary still yields text. Load checks the decompressed body after this.
+_ZSTD_SCAN = 2 * 1024 * 1024
 PREVIEW_WHOLE = 512 * 1024
 DEFAULT_LIMIT = 200
 
@@ -218,16 +220,58 @@ def _editor_task_dirs(extension_ids: tuple[str, ...], cli_dirs: tuple[Path, ...]
     return found
 
 
+def _is_reparse(path: Path) -> bool:
+    """Symlink or NTFS junction. An unreadable link fails closed."""
+    try:
+        if path.is_symlink():
+            return True
+        if hasattr(os.path, "isjunction") and os.path.isjunction(os.fspath(path)):
+            return True
+    except OSError:
+        return True
+    return False
+
+
+def _has_reparse_component(path: Path, root: Path) -> bool:
+    """True when path, or a directory strictly under root, is a symlink or junction.
+
+    Ancestors of root are ignored. A junction above the vendor home does not
+    hide a real store.
+    """
+    try:
+        root_abs = os.path.normcase(os.path.abspath(os.fspath(root)))
+        current = Path(os.path.abspath(os.fspath(path)))
+    except (OSError, ValueError):
+        return True
+    prefix = root_abs if root_abs.endswith(os.sep) else root_abs + os.sep
+    for _ in range(80):
+        try:
+            cur_abs = os.path.normcase(os.path.abspath(os.fspath(current)))
+        except (OSError, ValueError):
+            return True
+        if cur_abs == root_abs:
+            return False
+        if not cur_abs.startswith(prefix):
+            return False
+        if _is_reparse(current):
+            return True
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
+    return True
+
+
 def _is_real_dir(path: Path) -> bool:
     try:
-        return path.is_dir() and not path.is_symlink()
+        return path.is_dir() and not _is_reparse(path)
     except OSError:
         return False
 
 
 def _is_real_file(path: Path) -> bool:
     try:
-        return path.is_file() and not path.is_symlink()
+        return path.is_file() and not _is_reparse(path)
     except OSError:
         return False
 
@@ -277,7 +321,11 @@ def _path_inside(path: Path, root: Path) -> bool:
 
 
 def _within_homes(path: Path, homes: dict | None) -> bool:
-    """A real file under one configured home. Symlinks and C:\\Windows are out."""
+    """A real file under one configured home.
+
+    Symlinks, NTFS junctions, a reparse directory between the home and the
+    file, and C:\\Windows are out.
+    """
     if not _is_real_file(path) or _blocked_tree(path):
         return False
     if not isinstance(homes, dict):
@@ -285,17 +333,22 @@ def _within_homes(path: Path, homes: dict | None) -> bool:
     for root in homes.values():
         if root is None:
             continue
-        if _path_inside(path, Path(root)):
-            return True
+        root_path = Path(root)
+        if _has_reparse_component(path, root_path):
+            continue
+        try:
+            if path.resolve().is_relative_to(root_path.resolve()):
+                return True
+        except (OSError, ValueError):
+            continue
     return False
 
 
 def _prune_dirs(dirpath: str, dirnames: list[str], skip: tuple[str, ...] = ()) -> None:
     kept = []
     for name in dirnames:
-        if name in skip:
-            continue
-        if _blocked_tree(Path(dirpath) / name):
+        child = Path(dirpath) / name
+        if name in skip or _blocked_tree(child) or _is_reparse(child):
             continue
         kept.append(name)
     dirnames[:] = kept
@@ -1108,13 +1161,13 @@ def _claude_meta(path: Path) -> tuple[str, str]:
 
 
 def _enum_grok(root: Path) -> list[dict]:
-    if not root.is_dir() or _blocked_tree(root):
+    if not _is_real_dir(root) or _blocked_tree(root):
         return []
     hits = []
     stack = [root]
     while stack:
         current = stack.pop()
-        if _blocked_tree(current):
+        if _blocked_tree(current) or _is_reparse(current):
             continue
         try:
             scan = os.scandir(current)
@@ -1125,10 +1178,14 @@ def _enum_grok(root: Path) -> list[dict]:
                 try:
                     if entry.is_dir(follow_symlinks=False):
                         child = Path(entry.path)
-                        if entry.name not in ("node_modules", ".git") and not _blocked_tree(child):
+                        if (
+                            entry.name not in ("node_modules", ".git")
+                            and not _blocked_tree(child)
+                            and not _is_reparse(child)
+                        ):
                             stack.append(child)
                         continue
-                    if entry.name != "summary.json":
+                    if entry.name != "summary.json" or _is_reparse(Path(entry.path)):
                         continue
                 except OSError:
                     continue
@@ -1138,7 +1195,7 @@ def _enum_grok(root: Path) -> list[dict]:
                     st = hist.stat()
                 except OSError:
                     continue
-                if not hist.is_file() or hist.is_symlink():
+                if not _is_real_file(hist) or _has_reparse_component(hist, root):
                     continue
                 if _is_windows_tree(hist):
                     continue
@@ -1176,7 +1233,7 @@ def _claude_project_cwd(name: str) -> str:
 
 def _consume_claude_dir(project: Path, hits: list[dict]) -> None:
     """List session files. Do not open each transcript. Legal is the folder name."""
-    if _blocked_tree(project):
+    if _blocked_tree(project) or _is_reparse(project):
         return
     decoded = _claude_project_cwd(project.name)
     folder_legal = is_legal(str(project), "", decoded, "")
@@ -1187,7 +1244,7 @@ def _consume_claude_dir(project: Path, hits: list[dict]) -> None:
     with scan:
         for entry in scan:
             try:
-                if not entry.is_file(follow_symlinks=False):
+                if not entry.is_file(follow_symlinks=False) or _is_reparse(Path(entry.path)):
                     continue
             except OSError:
                 continue
@@ -1206,12 +1263,12 @@ def _consume_claude_dir(project: Path, hits: list[dict]) -> None:
 
 
 def _enum_claude(root: Path) -> list[dict]:
-    if not root.is_dir() or _blocked_tree(root):
+    if not _is_real_dir(root) or _blocked_tree(root):
         return []
     hits: list[dict] = []
     _consume_claude_dir(root, hits)
     try:
-        projects = [p for p in root.iterdir() if p.is_dir() and not p.is_symlink()]
+        projects = [p for p in root.iterdir() if _is_real_dir(p)]
     except OSError:
         return hits
     for project in projects:
@@ -1240,7 +1297,7 @@ def _enum_codex_files(root: Path) -> list[dict]:
             if not match:
                 continue
             path = Path(dirpath) / name
-            if _is_windows_tree(path) or path.is_symlink():
+            if _is_windows_tree(path) or not _is_real_file(path) or _has_reparse_component(path, root):
                 continue
             try:
                 st = path.stat()
@@ -1260,7 +1317,7 @@ def _codex_rollout_index(root: Path) -> dict[str, Path]:
     """
     sessions = root / "sessions"
     try:
-        if not sessions.is_dir() or _blocked_tree(sessions):
+        if not _is_real_dir(sessions) or _blocked_tree(sessions):
             return {}
     except OSError:
         return {}
@@ -1276,7 +1333,7 @@ def _codex_rollout_index(root: Path) -> dict[str, Path]:
             continue
         for name in filenames:
             path = Path(dirpath) / name
-            if _is_windows_tree(path):
+            if _is_windows_tree(path) or not _is_real_file(path) or _has_reparse_component(path, root):
                 continue
             leaf = name[:-4] if name.lower().endswith(".jsonl.zst") else name
             match = _ROLLOUT.match(leaf)
@@ -1306,14 +1363,14 @@ def _codex_row_uuids(hit: dict) -> list[str]:
 
 
 def _enum_codex(root: Path) -> list[dict]:
-    if root.is_file() and root.suffix == ".sqlite":
+    if _is_real_file(root) and root.suffix == ".sqlite":
         return _enum_codex_db(root)
-    if not root.is_dir():
+    if not _is_real_dir(root):
         return []
     db = None
     try:
         for child in root.iterdir():
-            if re.fullmatch(r"state_(\d+)\.sqlite", child.name) and child.is_file():
+            if re.fullmatch(r"state_(\d+)\.sqlite", child.name) and _is_real_file(child):
                 db = child
     except OSError:
         db = None
@@ -1357,7 +1414,7 @@ def _enum_codex(root: Path) -> list[dict]:
         match = _ROLLOUT.match(leaf)
         if not match:
             continue
-        if _is_windows_tree(path):
+        if _is_windows_tree(path) or not _is_real_file(path) or _has_reparse_component(path, root):
             continue
         try:
             size = path.stat().st_size
@@ -1376,17 +1433,15 @@ def _codex_rollout_allowed(cand: Path, root: Path) -> bool:
     """A rollout path the db may name.
 
     A missing file that still resolves under the codex root is kept so the
-    session index can repair it. An outside path, a symlink, or a blocked
-    tree falls back to the db.
+    session index can repair it. An outside path, a symlink, a junction, or
+    a blocked tree falls back to the db.
     """
-    if _blocked_tree(cand):
+    if _blocked_tree(cand) or _is_reparse(cand) or _has_reparse_component(cand, root):
         return False
     try:
-        if cand.is_symlink():
+        if not cand.resolve().is_relative_to(Path(root).resolve()):
             return False
-    except OSError:
-        return False
-    if not _path_inside(cand, root):
+    except (OSError, ValueError):
         return False
     try:
         exists = cand.exists()
@@ -1436,33 +1491,33 @@ def _enum_codex_db(db: Path) -> list[dict]:
 
 
 def _enum_cursor(root: Path) -> list[dict]:
-    if not root.is_dir() or _blocked_tree(root):
+    if not _is_real_dir(root) or _blocked_tree(root):
         return []
     hits = []
     chats = root / "chats"
-    if chats.is_dir() and not _blocked_tree(chats):
+    if _is_real_dir(chats) and not _blocked_tree(chats):
         try:
             workspaces = list(chats.iterdir())
         except OSError:
             workspaces = []
         for workspace in workspaces:
-            if not workspace.is_dir() or _blocked_tree(workspace):
+            if not _is_real_dir(workspace) or _blocked_tree(workspace):
                 continue
             try:
                 children = list(workspace.iterdir())
             except OSError:
                 continue
             for child in children:
-                if not child.is_dir() or _blocked_tree(child) or not _UUID.fullmatch(child.name):
+                if not _is_real_dir(child) or _blocked_tree(child) or not _UUID.fullmatch(child.name):
                     continue
                 meta_path = child / "meta.json"
                 store = child / "store.db"
-                path = meta_path if meta_path.is_file() else store
-                if not path.is_file() or _is_windows_tree(path):
+                path = meta_path if _is_real_file(meta_path) else store
+                if not _is_real_file(path) or _is_windows_tree(path) or _has_reparse_component(path, root):
                     continue
                 cwd, title = "", ""
                 # meta.json is the header. The transcript jsonl stays closed until enrich.
-                if meta_path.is_file() and not is_legal(str(meta_path)) and not is_legal(str(child)):
+                if _is_real_file(meta_path) and not is_legal(str(meta_path)) and not is_legal(str(child)):
                     try:
                         meta = json.loads(meta_path.read_text(encoding="utf-8"))
                     except (OSError, ValueError):
@@ -1475,18 +1530,18 @@ def _enum_cursor(root: Path) -> list[dict]:
                     updated=_mtime(path),
                 ))
     projects = root / "projects"
-    if projects.is_dir() and not _blocked_tree(projects):
+    if _is_real_dir(projects) and not _blocked_tree(projects):
         seen = {h["vendor_id"] for h in hits}
         try:
-            workspaces = [p for p in projects.iterdir() if p.is_dir() and not _blocked_tree(p)]
+            workspaces = [p for p in projects.iterdir() if _is_real_dir(p) and not _blocked_tree(p)]
         except OSError:
             workspaces = []
         for workspace in workspaces:
             agent = workspace / "agent-transcripts"
-            if not agent.is_dir() or _blocked_tree(agent):
+            if not _is_real_dir(agent) or _blocked_tree(agent):
                 continue
             try:
-                folders = [p for p in agent.iterdir() if p.is_dir() and not _blocked_tree(p)]
+                folders = [p for p in agent.iterdir() if _is_real_dir(p) and not _blocked_tree(p)]
             except OSError:
                 continue
             for folder in folders:
@@ -1495,9 +1550,14 @@ def _enum_cursor(root: Path) -> list[dict]:
                 except OSError:
                     continue
                 for path in children:
-                    if path.suffix.lower() != ".jsonl" or not path.is_file() or path.is_symlink():
+                    if path.suffix.lower() != ".jsonl" or not _is_real_file(path):
                         continue
-                    if _is_windows_tree(path) or not _UUID.fullmatch(path.stem) or path.stem in seen:
+                    if (
+                        _is_windows_tree(path)
+                        or _has_reparse_component(path, root)
+                        or not _UUID.fullmatch(path.stem)
+                        or path.stem in seen
+                    ):
                         continue
                     try:
                         st = path.stat()
@@ -1528,7 +1588,7 @@ def _enum_cursor_desktop() -> list[dict]:
     if not appdata:
         return []
     path = Path(appdata) / "Cursor" / "User" / "globalStorage" / "state.vscdb"
-    if not path.is_file() or path.is_symlink():
+    if not _is_real_file(path):
         return []
     hits = []
     con = None
@@ -1665,7 +1725,7 @@ def _enum_openwork(store: Path) -> list[dict]:
 
 def _enum_loose_jsonl(harness: str, root: Path | None) -> list[dict]:
     """File names and stats. The jsonl body is an enrich read, not a list read."""
-    if root is None or not root.is_dir() or _blocked_tree(root):
+    if root is None or not _is_real_dir(root) or _blocked_tree(root):
         return []
     hits = []
     try:
@@ -1678,7 +1738,7 @@ def _enum_loose_jsonl(harness: str, root: Path | None) -> list[dict]:
             if not name.lower().endswith(".jsonl"):
                 continue
             path = Path(dirpath) / name
-            if path.is_symlink() or _is_windows_tree(path):
+            if not _is_real_file(path) or _is_windows_tree(path) or _has_reparse_component(path, root):
                 continue
             try:
                 st = path.stat()
@@ -1807,7 +1867,10 @@ def _hermes_state_files(path: Path) -> list[Path]:
         if not _is_real_dir(profiles):
             continue
         try:
-            files.extend(db for db in profiles.glob("*/state.db") if _is_real_file(db))
+            files.extend(
+                db for db in profiles.glob("*/state.db")
+                if _is_real_file(db) and not _has_reparse_component(db, profiles)
+            )
         except OSError:
             continue
     return files
@@ -1900,6 +1963,7 @@ def _enum_copilot(root: Path) -> list[dict]:
             files = [
                 p for p in root.glob("*/events.jsonl")
                 if _is_real_file(p) and not _blocked_tree(p.parent) and not _is_windows_tree(p)
+                and not _has_reparse_component(p, root)
             ]
         except OSError:
             return []
@@ -1921,20 +1985,20 @@ def _enum_copilot(root: Path) -> list[dict]:
 
 
 def _enum_task_dirs(harness: str, root: Path) -> list[dict]:
-    if not root.is_dir() or root.is_symlink() or _blocked_tree(root):
+    if not _is_real_dir(root) or _blocked_tree(root):
         return []
     try:
         children = list(root.iterdir())
     except OSError:
         return []
-    folders = [root] if (root / "api_conversation_history.json").is_file() else children
+    folders = [root] if _is_real_file(root / "api_conversation_history.json") else children
     hits = []
     for folder in folders:
         try:
-            if not folder.is_dir() or folder.is_symlink() or _blocked_tree(folder):
+            if not _is_real_dir(folder) or _blocked_tree(folder):
                 continue
             hist = folder / "api_conversation_history.json"
-            if not hist.is_file() or hist.is_symlink() or _is_windows_tree(hist):
+            if not _is_real_file(hist) or _is_windows_tree(hist) or _has_reparse_component(hist, root):
                 continue
             title = ""
             if not is_legal(str(hist)) and not is_legal(str(folder)):
@@ -1978,6 +2042,7 @@ def _enum_messages(harness: str, root: Path) -> list[dict]:
         files.extend(
             p for p in root.glob("*/*.messages.json")
             if _is_real_file(p) and not _blocked_tree(p.parent) and not _is_windows_tree(p)
+            and not _has_reparse_component(p, root)
         )
     except OSError:
         return []
@@ -2235,10 +2300,12 @@ def _enum_openhands(root: Path) -> list[dict]:
                 states = [
                     p for p in root.glob("*/base_state.json")
                     if _is_real_file(p) and not _blocked_tree(p.parent)
+                    and not _has_reparse_component(p, root)
                 ]
                 states += [
                     p for p in root.glob("conversations/*/base_state.json")
                     if _is_real_file(p) and not _blocked_tree(p.parent)
+                    and not _has_reparse_component(p, root)
                 ]
             except OSError:
                 return []
@@ -2880,7 +2947,8 @@ def _rows_from_bytes(raw: bytes) -> tuple[list[dict], bool]:
     return rows, truncated
 
 
-def _read_jsonl_zst(path: Path) -> tuple[list[dict], bool]:
+def _zstd_bytes(path: Path) -> bytes:
+    """Whole decompressed payload, bounded by MAX_BYTES on both sides."""
     try:
         size = path.stat().st_size
     except OSError as exc:
@@ -2895,9 +2963,16 @@ def _read_jsonl_zst(path: Path) -> tuple[list[dict], bool]:
         raw = zstd.decompress(path.read_bytes())
     except Exception as exc:
         raise PageError("UNPARSEABLE", path.name) from exc
+    if isinstance(raw, str):
+        raw = raw.encode("utf-8")
+    raw = bytes(raw)
     if len(raw) > MAX_BYTES:
         raise PageError("TOO_LARGE", path.name)
-    return _rows_from_bytes(raw)
+    return raw
+
+
+def _read_jsonl_zst(path: Path) -> tuple[list[dict], bool]:
+    return _rows_from_bytes(_zstd_bytes(path))
 
 
 def _read_jsonl(path: Path) -> tuple[list[dict], bool]:
@@ -3069,6 +3144,7 @@ def _turns_openwork(hit: dict) -> tuple[list[dict], bool, int]:
         raise PageError("DO_NOT_REINGEST", hit["id"])
     if hit["legal"]:
         raise PageError("LEGAL_OMITTED", hit["id"])
+    _openwork_refuse_body(hit)
     db = Path(hit["path"])
     try:
         uri = db.resolve().as_uri() + "?mode=ro"
@@ -3184,7 +3260,7 @@ def _guard_size(path: Path) -> int:
     return size
 
 
-_SQL_TEXT = (".db", ".sqlite", ".sqlite3")
+_SQL_TEXT = (".db", ".sqlite", ".sqlite3", ".vscdb")
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -3197,45 +3273,91 @@ def _read_head_text(path: Path, limit: int) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def _zstd_head_text(path: Path, limit: int = _ZSTD_SCAN) -> str:
-    """First decompressed bytes, or empty when zstd is missing or the frame is not."""
-    dec_mod = None
+def _zstd_module():
     try:
         from compression import zstd as dec_mod
+        return dec_mod
     except ImportError:
         try:
             import zstandard as dec_mod  # type: ignore
+            return dec_mod
         except ImportError:
-            return ""
+            return None
+
+
+def _zstd_stream(dec_mod):
+    """A streaming decompressor. Stdlib ZstdDecompressor already streams.
+
+    The third-party package exposes the same work on decompressobj().
+    """
+    dec = dec_mod.ZstdDecompressor()
+    factory = getattr(dec, "decompressobj", None)
+    if callable(factory):
+        return factory()
+    return dec
+
+
+def _zstd_pull(stream, data: bytes, room: int) -> bytes:
+    if room <= 0:
+        return b""
+    try:
+        piece = stream.decompress(data, max_length=room)
+    except TypeError:
+        piece = stream.decompress(data)
+    if isinstance(piece, str):
+        piece = piece.encode("utf-8", errors="replace")
+    return bytes(piece or b"")
+
+
+def _zstd_head_text(path: Path, limit: int = _ZSTD_SCAN) -> str:
+    """Decompressed text up to limit. A frame boundary does not abort the scan."""
+    dec_mod = _zstd_module()
+    if dec_mod is None or not hasattr(dec_mod, "ZstdDecompressor"):
+        return ""
+    cap = max(int(limit), 1)
+    out = bytearray()
     try:
         with path.open("rb") as handle:
-            raw = handle.read(max(limit, 1))
-    except OSError:
-        return ""
-    out = b""
-    try:
-        if hasattr(dec_mod, "ZstdDecompressor"):
-            dec = dec_mod.ZstdDecompressor()
-            try:
-                out = dec.decompress(raw, max_length=limit)
-            except TypeError:
-                out = dec.decompress(raw)
-        else:
-            out = dec_mod.decompress(raw)
+            stream = _zstd_stream(dec_mod)
+            pending = b""
+            idle = 0
+            while len(out) < cap and idle < 8:
+                if getattr(stream, "eof", False):
+                    extra = bytes(getattr(stream, "unused_data", b"") or b"")
+                    stream = _zstd_stream(dec_mod)
+                    pending = extra + pending
+                    if not pending:
+                        more = handle.read(64 * 1024)
+                        if not more:
+                            break
+                        pending = more
+                if getattr(stream, "needs_input", True):
+                    if not pending:
+                        more = handle.read(64 * 1024)
+                        if not more:
+                            piece = _zstd_pull(stream, b"", cap - len(out))
+                            if piece:
+                                out.extend(piece[: cap - len(out)])
+                            break
+                        pending = more
+                    chunk = pending
+                    pending = b""
+                else:
+                    chunk = b""
+                piece = _zstd_pull(stream, chunk, cap - len(out))
+                if piece:
+                    out.extend(piece[: cap - len(out)])
+                if getattr(stream, "eof", False):
+                    extra = bytes(getattr(stream, "unused_data", b"") or b"")
+                    pending = extra + pending
+                if piece or pending:
+                    idle = 0
+                else:
+                    idle += 1
     except Exception:
-        try:
-            size = path.stat().st_size
-        except OSError:
+        if not out:
             return ""
-        if size > limit * 4:
-            return ""
-        try:
-            out = dec_mod.decompress(path.read_bytes())
-        except Exception:
-            return ""
-    if isinstance(out, str):
-        return out[:limit]
-    return bytes(out)[:limit].decode("utf-8", errors="replace")
+    return bytes(out[:cap]).decode("utf-8", errors="replace")
 
 
 def _sqlite_sample_text(path: Path, limit: int = 8192) -> str:
@@ -3327,14 +3449,63 @@ def _is_legal_file(path: Path, hit: dict) -> bool:
     return False
 
 
+def _seal_legal(hit: dict) -> None:
+    hit["legal"] = True
+    hit["title"] = ""
+    hit["cwd"] = ""
+    _remember_legal(hit)
+
+
+def _refuse_legal_text(hit: dict, text: str) -> None:
+    """Refuse when a loaded body contains a legal path mark.
+
+    `is_legal` matches store paths (`\\legal`, `p:\\legal`, `v:\\ai\\legal`,
+    `\\abraxas`). The bare word legal does not match.
+    """
+    if text and is_legal(title=text):
+        _seal_legal(hit)
+        raise PageError("LEGAL_OMITTED", str(hit.get("id") or ""))
+
+
+def _refuse_legal_pieces(hit: dict, pieces) -> None:
+    acc: list[str] = []
+    size = 0
+    for piece in pieces:
+        if not isinstance(piece, str) or not piece:
+            continue
+        acc.append(piece)
+        size += len(piece)
+        if size >= 1024 * 1024:
+            _refuse_legal_text(hit, "\n".join(acc))
+            acc.clear()
+            size = 0
+    if acc:
+        _refuse_legal_text(hit, "\n".join(acc))
+
+
+def _refuse_file_text(hit: dict, path: Path) -> None:
+    """Legal marks in a transcript body, including past the open-time sniff."""
+    name = path.name.lower()
+    if name.endswith((".jsonl.zst", ".jsonl.zstd", ".zst")):
+        raw = _zstd_bytes(path)
+        _refuse_legal_text(hit, raw.decode("utf-8", errors="replace"))
+        return
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_BYTES)
+    except OSError as exc:
+        raise PageError("NO_STORE", str(path)) from exc
+    if raw:
+        _refuse_legal_text(hit, raw.decode("utf-8", errors="replace"))
+
+
 def _open_hit(hit: dict) -> dict:
     """Refuse a legal transcript before any full read."""
     path = Path(hit.get("path") or "")
+    if _is_reparse(path):
+        raise PageError("NOT_FOUND", str(hit.get("id") or ""))
     if hit.get("legal") or _is_legal_file(path, hit):
-        hit["legal"] = True
-        hit["title"] = ""
-        hit["cwd"] = ""
-        _remember_legal(hit)
+        _seal_legal(hit)
         raise PageError("LEGAL_OMITTED", hit["id"])
     return hit
 
@@ -3406,9 +3577,105 @@ def _hermes_query(db: Path, vendor_id: str, limit: int, skip_system: bool = Fals
     return count, fetched
 
 
+def _sql_ro(path: Path) -> sqlite3.Connection:
+    uri = path.resolve().as_uri() + "?mode=ro"
+    return sqlite3.connect(uri, uri=True, timeout=1.0)
+
+
+def _close_sql(con: sqlite3.Connection | None) -> None:
+    if con is None:
+        return
+    try:
+        con.close()
+    except sqlite3.Error:
+        pass
+    del con
+    gc.collect()
+
+
+def _hermes_refuse_body(hit: dict) -> None:
+    """Every message cell, not the 20-row sniff."""
+    db = Path(hit.get("path") or "")
+    vendor_id = str(hit.get("vendor_id") or "")
+    if not _is_real_file(db) or not vendor_id:
+        return
+    con = None
+    acc: list[str] = []
+    size = 0
+    try:
+        con = _sql_ro(db)
+        rows = con.execute(
+            "SELECT content FROM messages WHERE session_id=? ORDER BY timestamp",
+            (vendor_id,),
+        )
+        for (content,) in rows:
+            piece = _hermes_text(content)
+            if not piece:
+                continue
+            acc.append(piece)
+            size += len(piece)
+            if size >= 1024 * 1024:
+                _refuse_legal_text(hit, "\n".join(acc))
+                acc.clear()
+                size = 0
+    except PageError:
+        raise
+    except sqlite3.Error:
+        return
+    finally:
+        _close_sql(con)
+    if acc:
+        _refuse_legal_text(hit, "\n".join(acc))
+
+
+def _openwork_refuse_body(hit: dict) -> None:
+    """Every message and part cell, not the preview limit."""
+    db = Path(hit.get("path") or "")
+    vendor_id = str(hit.get("vendor_id") or "")
+    if not _is_real_file(db) or not vendor_id:
+        return
+    con = None
+    acc: list[str] = []
+    size = 0
+    try:
+        con = _sql_ro(db)
+        for sql in (
+            "SELECT data FROM message WHERE session_id=?",
+            "SELECT data FROM part WHERE session_id=?",
+        ):
+            try:
+                rows = con.execute(sql, (vendor_id,))
+            except sqlite3.Error:
+                continue
+            for (data,) in rows:
+                if isinstance(data, bytes):
+                    piece = data.decode("utf-8", errors="replace")
+                elif isinstance(data, str):
+                    piece = data
+                else:
+                    continue
+                if not piece:
+                    continue
+                acc.append(piece)
+                size += len(piece)
+                if size >= 1024 * 1024:
+                    _refuse_legal_text(hit, "\n".join(acc))
+                    acc.clear()
+                    size = 0
+    except PageError:
+        raise
+    except sqlite3.Error:
+        return
+    finally:
+        _close_sql(con)
+    if acc:
+        _refuse_legal_text(hit, "\n".join(acc))
+
+
 def _turns_hermes(hit: dict) -> tuple[list[dict], bool, int]:
     if hit.get("legal"):
         raise PageError("LEGAL_OMITTED", hit["id"])
+    _hermes_refuse_body(hit)
     count, rows = _hermes_query(Path(hit["path"]), hit["vendor_id"], SESSION_CAP + 1)
     truncated = count > SESSION_CAP or len(rows) > SESSION_CAP
     if len(rows) > SESSION_CAP:
@@ -3724,8 +3991,19 @@ def _antigravity_step_texts(hit: dict) -> tuple[list[str], bool]:
 def _turns_antigravity(hit: dict) -> tuple[list[dict], bool, str]:
     if hit.get("legal"):
         raise PageError("LEGAL_OMITTED", hit["id"])
+    conv = _antigravity_conv(hit)
+    if conv is not None:
+        blobs, _more = _antigravity_step_blobs(conv)
+        decoded: list[str] = []
+        for blob in blobs:
+            if isinstance(blob, bytes):
+                decoded.append(blob.decode("utf-8", errors="replace"))
+            elif isinstance(blob, str):
+                decoded.append(blob)
+        _refuse_legal_pieces(hit, decoded)
     texts, truncated = _antigravity_step_texts(hit)
     if texts:
+        _refuse_legal_pieces(hit, texts)
         turns = [
             {"seq": i, "role": "meta", "text": text, "model": None}
             for i, text in enumerate(texts, start=1)
@@ -3735,6 +4013,7 @@ def _turns_antigravity(hit: dict) -> tuple[list[dict], bool, str]:
         )
         return turns, truncated, source_sha
     preview, truncated = _summary_preview(hit)
+    _refuse_legal_text(hit, preview)
     turns = [{"seq": 1, "role": "user", "text": preview, "model": None}]
     source_sha = sha256_bytes(
         (str(hit["vendor_id"]) + "\n").encode("utf-8") + preview.encode("utf-8")
@@ -3755,6 +4034,8 @@ def _rows_from_json(obj: object) -> list[dict]:
 def load_record(hit: dict) -> dict:
     hit = _open_hit(hit)
     path = Path(hit["path"])
+    if _is_reparse(path):
+        raise PageError("NOT_FOUND", str(hit.get("id") or ""))
     harness = hit["harness"]
     # Whole-file guards reject a multi-gigabyte database before the per-session query.
     if (
@@ -3778,19 +4059,24 @@ def load_record(hit: dict) -> dict:
     elif path.name.lower().endswith(".jsonl.zst"):
         if not path.is_file():
             raise PageError("MISSING_FILE", "rollout file is gone")
-        rows, truncated = _read_jsonl_zst(path)
+        raw = _zstd_bytes(path)
+        _refuse_legal_text(hit, raw.decode("utf-8", errors="replace"))
+        rows, truncated = _rows_from_bytes(raw)
         turns = _turns_from_rows(rows, harness)
         source_sha = sha256_bytes(path.read_bytes())
     elif path.suffix.lower() == ".jsonl":
         if not path.is_file():
             zst = Path(str(path) + ".zst")
             if zst.is_file():
-                rows, truncated = _read_jsonl_zst(zst)
+                raw = _zstd_bytes(zst)
+                _refuse_legal_text(hit, raw.decode("utf-8", errors="replace"))
+                rows, truncated = _rows_from_bytes(raw)
                 turns = _turns_from_rows(rows, harness)
                 source_sha = sha256_bytes(zst.read_bytes())
             else:
                 raise PageError("MISSING_FILE", "rollout file is gone")
         else:
+            _refuse_file_text(hit, path)
             rows, truncated = _read_jsonl(path)
             turns = _turns_from_rows(rows, harness)
             source_sha = sha256_bytes(path.read_bytes())
@@ -3809,6 +4095,7 @@ def load_record(hit: dict) -> dict:
         raise PageError("UNMEASURED", "cursor store.db has no transcript adapter in this plug")
     else:
         raise PageError("UNMEASURED", hit["path"])
+    _refuse_legal_pieces(hit, [str(turn.get("text") or "") for turn in turns])
     head = {
         "schema": TRANSCRIPT,
         "kind": "COSMOS_TRANSCRIPT",
@@ -3888,8 +4175,11 @@ def _preview_result(hit: dict, kind: str, n_turns: int | None, shown: list[dict]
     })
 
 
-def _jsonl_head_turns(path: Path, harness: str, n_want: int) -> tuple[list[dict], int | None, bool]:
+def _jsonl_head_turns(path: Path, harness: str, n_want: int,
+                      hit: dict | None = None) -> tuple[list[dict], int | None, bool]:
     """Read a short preview. A small file reports a real total. Nothing is hashed."""
+    if isinstance(hit, dict):
+        _refuse_file_text(hit, path)
     try:
         size = path.stat().st_size
     except OSError as exc:
@@ -3931,6 +4221,7 @@ def _jsonl_head_turns(path: Path, harness: str, n_want: int) -> tuple[list[dict]
 def _preview_hermes(hit: dict, n_want: int, chars: int) -> dict:
     if hit.get("legal"):
         raise PageError("LEGAL_OMITTED", hit["id"])
+    _hermes_refuse_body(hit)
     count, rows = _hermes_query(
         Path(hit["path"]), hit["vendor_id"], max(0, int(n_want)), skip_system=True,
     )
@@ -3947,6 +4238,7 @@ def _preview_antigravity(hit: dict, n_want: int, chars: int) -> dict:
 def _preview_openwork(hit: dict, n_want: int, chars: int) -> dict:
     if str(hit["vendor_id"]).startswith("ses_cow_"):
         raise PageError("DO_NOT_REINGEST", hit["id"])
+    _openwork_refuse_body(hit)
     db = Path(hit["path"])
     con = None
     try:
@@ -3987,7 +4279,7 @@ def _preview_openwork(hit: dict, n_want: int, chars: int) -> dict:
 def _preview_cowork(hit: dict, n_want: int, chars: int) -> dict:
     path = Path(hit["path"])
     if path.suffix.lower() == ".jsonl":
-        parsed, n_turns, truncated = _jsonl_head_turns(path, "grok", n_want)
+        parsed, n_turns, truncated = _jsonl_head_turns(path, "grok", n_want, hit)
         kind = "TRUNCATED" if truncated else "OK"
         return _preview_result(hit, kind, n_turns, _clip_turns(parsed, n_want, chars))
     size = _guard_size(path)
@@ -4025,8 +4317,12 @@ def preview(rec_id: str, homes: dict | None = None, turns: int = 6, chars: int =
     homes = homes if homes is not None else default_homes()
     hit = _open_hit(_by_id(homes, rec_id))
     path = Path(hit["path"])
+    if _is_reparse(path):
+        raise PageError("NOT_FOUND", str(hit.get("id") or ""))
     n_want = max(0, int(turns))
     limit = max(0, int(chars))
+    if path.name.lower().endswith((".jsonl.zst", ".jsonl.zstd")) and path.is_file():
+        _refuse_file_text(hit, path)
     if hit["harness"] == "openwork":
         return _preview_openwork(hit, n_want, limit)
     if hit["harness"] == "hermes":
@@ -4036,7 +4332,7 @@ def preview(rec_id: str, homes: dict | None = None, turns: int = 6, chars: int =
     if hit["harness"] == "cowork":
         return _preview_cowork(hit, n_want, limit)
     if path.suffix.lower() == ".jsonl" and path.is_file():
-        parsed, n_turns, truncated = _jsonl_head_turns(path, hit["harness"], n_want)
+        parsed, n_turns, truncated = _jsonl_head_turns(path, hit["harness"], n_want, hit)
         kind = "TRUNCATED" if truncated else "OK"
         return _preview_result(hit, kind, n_turns, _clip_turns(parsed, n_want, limit))
     if path.suffix.lower() == ".json" and path.is_file():

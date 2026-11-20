@@ -159,11 +159,21 @@
     return String(a.id || "").localeCompare(String(b.id || ""));
   }
 
+  function bootToken() {
+    var el = typeof document !== "undefined" && document.querySelector
+      ? document.querySelector('meta[name="cm-token"]')
+      : null;
+    return el ? (el.getAttribute("content") || "") : "";
+  }
+
   function post(body) {
     if (typeof fetch !== "function") return Promise.reject(new Error("No network"));
+    var headers = { "Content-Type": "application/json" };
+    var tok = bootToken();
+    if (tok) headers["X-CM-Token"] = tok;
     return fetch("/api/run", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: headers,
       body: JSON.stringify(body)
     }).then(function (res) {
       return res.json().then(function (rec) {

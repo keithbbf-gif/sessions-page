@@ -8,6 +8,7 @@ Screenshots land in ``var/gui_verify/``.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -37,6 +38,8 @@ GROK_CEILING = "22222222-2222-4222-8222-222222222222"
 CLAUDE_TOOL = "33333333-3333-4333-8333-333333333333"
 CLAUDE_LEGAL = "44444444-4444-4444-8444-444444444444"
 CODEX_ID = "55555555-5555-4555-8555-555555555555"
+XSS_ID = "66666666-6666-4666-8666-666666666666"
+XSS_MARK = '<img src=x onerror="window.__xss=1">\'quote'
 
 TITLE_NORMAL = "Grok Normal Twenty Five"
 TITLE_CEILING = "Grok Over Ceiling"
@@ -167,6 +170,21 @@ def _fixture(root: Path) -> None:
                 "content": [{"type": "text", "text": f"{LEGAL_SECRET} {BRIEF_MARK}"}],
             },
         }) + "\n",
+        encoding="utf-8",
+    )
+
+    xss = root / "grok" / "xss"
+    xss.mkdir(parents=True)
+    (xss / "summary.json").write_text(json.dumps({
+        "info": {
+            "id": XSS_ID,
+            "cwd": "V:\\work\\" + XSS_MARK,
+            "generated_title": XSS_MARK,
+            "current_model_id": "grok-test",
+        }
+    }), encoding="utf-8")
+    (xss / "chat_history.jsonl").write_text(
+        json.dumps({"type": "user", "text": "xss probe turn"}) + "\n",
         encoding="utf-8",
     )
 
@@ -421,7 +439,7 @@ def app():
         status, found = _post(port, "/api/run", {"action": "find", "limit": 50})
         assert status == 200, found
         hits = found.get("hits") or []
-        assert len(hits) == 5, [(h.get("title"), h.get("harness"), h.get("legal")) for h in hits]
+        assert len(hits) == 6, [(h.get("title"), h.get("harness"), h.get("legal")) for h in hits]
         for hit in hits:
             assert _under(hit.get("path") or "", root), hit.get("path")
         titles = {h.get("title") for h in hits}
@@ -429,7 +447,11 @@ def app():
         assert TITLE_CEILING in titles
         assert TITLE_CLAUDE in titles
         assert TITLE_CODEX in titles
+        assert XSS_MARK in titles
         assert LEGAL_SECRET not in titles
+        xss_hit = next(h for h in hits if h.get("title") == XSS_MARK)
+        assert xss_hit.get("legal") is not True
+        assert XSS_MARK in str(xss_hit.get("cwd") or "")
         assert found.get("legal_omitted", 0) >= 1
         legal_hits = [h for h in hits if h.get("legal")]
         assert len(legal_hits) == 1 and legal_hits[0].get("title") == ""
@@ -525,6 +547,10 @@ def _shot(page, name: str) -> None:
 def test_frontend_gui(app: App) -> None:
     page = app.page
     watch = app.watch
+    manifest = json.loads((HERE / "ui" / "manifest.json").read_text(encoding="utf-8"))
+    digest = hashlib.sha256((HERE / "ui" / "solaro-account.js").read_bytes()).hexdigest()
+    assert manifest.get("file") == "solaro-account.js"
+    assert manifest.get("sha256") == digest
     today = date.today()
     month_title = f"{MONTHS[today.month - 1].upper()} {today.year}"
     day_label = f"{MONTHS_SHORT[today.month - 1]} {today.day}"
@@ -585,7 +611,7 @@ def test_frontend_gui(app: App) -> None:
     row_style = page.locator("#alignedRowsHost > div").first.get_attribute("style") or ""
     assert "26px" in row_style
     slice_text = page.locator("#pageSlice").inner_text()
-    assert "of 5" in slice_text
+    assert "of 6" in slice_text
     assert page.locator("#pageLabel").inner_text().startswith("Page ")
     table_text = page.locator("#alignedRowsHost").inner_text()
     assert "$0.05 est" in table_text
@@ -605,6 +631,37 @@ def test_frontend_gui(app: App) -> None:
     _wait_row(page, TITLE_NORMAL)
     assert page.locator("html").get_attribute("data-theme") == "dark"
     assert page.locator("html").get_attribute("data-density") == "regular"
+    page.evaluate(
+        """() => {
+          const light = JSON.stringify({theme: 'light', rowDensity: 'regular', pageSize: 100});
+          localStorage.setItem('cmSessions.settings', light);
+          window.dispatchEvent(new StorageEvent('storage', {key: 'cmSessions.settings', newValue: light}));
+        }"""
+    )
+    page.wait_for_function(
+        """() => {
+          const root = document.documentElement;
+          return root.getAttribute('data-theme') === 'light'
+            && root.style.getPropertyValue('--background').trim() === '#f6f3ec'
+            && root.style.getPropertyValue('--card').trim() === '#fffdf8';
+        }"""
+    )
+    page.evaluate(
+        """() => {
+          const dark = JSON.stringify({theme: 'dark', rowDensity: 'regular', pageSize: 100});
+          localStorage.setItem('cmSessions.settings', dark);
+          window.dispatchEvent(new StorageEvent('storage', {key: 'cmSessions.settings', newValue: dark}));
+        }"""
+    )
+    page.wait_for_function(
+        """() => {
+          const root = document.documentElement;
+          return root.getAttribute('data-theme') === 'dark'
+            && root.style.getPropertyValue('--background').trim() === ''
+            && root.style.getPropertyValue('--card').trim() === ''
+            && root.style.getPropertyValue('--foreground').trim() === '';
+        }"""
+    )
     page.locator("#topBtnTable").click()
     _shot(page, "fullscreen_table.png")
     watch.assert_clean("reset table")
@@ -638,8 +695,32 @@ def test_frontend_gui(app: App) -> None:
     assert "Primary Action" in ceiling_text
     assert "Hand Off" in ceiling_text
     assert "Force Resume" in ceiling_text
+    assert "Exploratory work stopped" not in ceiling_text
     assert "\u25b6 Resume in" not in ceiling_text
     assert page.locator("#toolbarResume").is_disabled()
+    page.wait_for_selector("#activeSessionPane .turn-body", timeout=30000)
+    overflow = page.evaluate(
+        """() => getComputedStyle(document.querySelector('#activeSessionPane .turn-body')).overflowWrap"""
+    )
+    assert overflow == "anywhere", overflow
+    launch_posts: list[str] = []
+    confirm_types: list[str] = []
+
+    def _see_dialog(dialog) -> None:
+        confirm_types.append(dialog.type)
+
+    def _see_launch(request) -> None:
+        if request.method != "POST" or not str(request.url).endswith("/api/run"):
+            return
+        raw = request.post_data or ""
+        if "resume" in raw and "launch" in raw and "true" in raw:
+            launch_posts.append(raw)
+
+    page.on("dialog", _see_dialog)
+    page.on("request", _see_launch)
+    page.locator("#activeSessionPane button", has_text="Force Resume").click()
+    assert "confirm" in confirm_types, confirm_types
+    assert launch_posts == [], launch_posts
     _shot(page, "inspector_180k.png")
     watch.assert_clean("180k ceiling")
 
@@ -731,6 +812,13 @@ def test_frontend_gui(app: App) -> None:
     page.locator("#topBtnTable").click()
     _click_visible(page, TITLE_NORMAL)
     page.wait_for_selector("#inspectorTitle")
+    page.wait_for_function(
+        """() => {
+          const pane = document.getElementById('activeSessionPane');
+          const text = pane ? pane.innerText : '';
+          return text.includes('hello grok normal') && !text.includes('Reading live transcript');
+        }"""
+    )
     page.locator("#inspectorTitle").dblclick()
     title_input = page.locator("input[id^='inlineInput_']")
     title_input.fill(TITLE_RENAMED)
@@ -747,6 +835,24 @@ def test_frontend_gui(app: App) -> None:
     assert TAG_CUSTOM in page.locator("body").inner_text()
     assert page.locator("#alignedRowsHost").inner_text().count(TITLE_RENAMED) >= 1
     watch.assert_clean("title tag persistence")
+
+    page.locator("#topBtnProjects").click()
+    xss_chip = page.locator('#projectFilterChips [data-action="toggle-proj-select"]').filter(has_text=XSS_MARK)
+    xss_chip.wait_for()
+    xss_chip.click()
+    xss_chip.click()
+    xss_header = page.locator('[data-action="toggle-proj-expand"]').filter(has_text=XSS_MARK).first
+    xss_title = page.locator("#alignedRowsHost span.tall-summary-text").filter(has_text=XSS_MARK)
+    if xss_title.count() == 0:
+        xss_header.click()
+    xss_title.first.wait_for(state="visible")
+    xss_title.first.click()
+    page.locator("#inspectorTitle").wait_for()
+    assert XSS_MARK in page.locator("#inspectorTitle").inner_text()
+    assert page.evaluate("() => window.__xss") is None
+    assert page.locator("img[onerror]").count() == 0
+    watch.assert_clean("xss fixture")
+    page.locator("#topBtnTable").click()
 
     status, places = _get(app.port, "/api/places")
     assert status == 200
@@ -799,6 +905,16 @@ def test_frontend_gui(app: App) -> None:
         }"""
     )
     assert page.evaluate("() => document.querySelector('solaro-account').shadowRoot !== null")
+    credits_tile = page.evaluate(
+        """() => {
+          const root = document.querySelector('solaro-account').shadowRoot;
+          const tiles = [...root.querySelectorAll('.tile')];
+          const tile = tiles.find((el) => /credits/i.test(el.textContent || ''));
+          return tile ? tile.textContent : '';
+        }"""
+    )
+    assert "\u2014" in credits_tile
+    assert "$0.0000" not in credits_tile
     for tab in SOLARO_TABS:
         page.evaluate(
             """(name) => {
@@ -815,6 +931,20 @@ def test_frontend_gui(app: App) -> None:
             }""",
             arg=tab,
         )
+        page.wait_for_function(
+            """() => {
+              const view = document.querySelector('solaro-account').shadowRoot.querySelector('#view');
+              return !!(view && (view.textContent || '').trim().length > 12);
+            }"""
+        )
+        if tab == "settings":
+            auto_on = page.evaluate(
+                """() => {
+                  const box = document.querySelector('solaro-account').shadowRoot.querySelector('#auto');
+                  return !!(box && box.checked);
+                }"""
+            )
+            assert auto_on is False
     page.evaluate(
         """() => {
           document.querySelector('solaro-account').shadowRoot

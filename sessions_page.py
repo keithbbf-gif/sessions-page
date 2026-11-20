@@ -202,8 +202,11 @@ def _mdata_status(body: dict) -> dict:
         return fail
     if not isinstance(rec, dict):
         return fail
+    cleaned = _panel_clean(rec)
+    if not isinstance(cleaned, dict):
+        return fail
     out = {"kind": "OK"}
-    out.update(rec)
+    out.update(cleaned)
     if not isinstance(out.get("axes"), dict):
         out["axes"] = {}
     return out
@@ -310,8 +313,22 @@ def _open_folder(body: dict) -> dict:
     return {"kind": "OK", "opened": (not bool(body.get("dry"))), "path": name}
 
 
+def _panel_fs_path(text: str) -> bool:
+    """A raw filesystem path. Short URL paths such as /v1/models stay."""
+    if "\\" in text:
+        return True
+    if len(text) >= 3 and text[1] == ":" and text[2] in "/\\":
+        return True
+    lowered = text.lower()
+    if "/users/" in lowered or "/home/" in lowered or lowered.startswith(("~/", "/users", "/home")):
+        return True
+    if text.startswith(("/usr/", "/var/", "/etc/", "/opt/", "/private/", "/tmp/")):
+        return True
+    return False
+
+
 def _panel_clean(value: object, depth: int = 0) -> object:
-    """Drop secret-shaped keys and values before a panel reply."""
+    """Drop secret-shaped keys, bearer values, and raw filesystem paths."""
     if depth > 6:
         return None
     if value is None or isinstance(value, (bool, int)):
@@ -322,6 +339,8 @@ def _panel_clean(value: object, depth: int = 0) -> object:
         return value
     if isinstance(value, str):
         text = value.strip()
+        if _panel_fs_path(text):
+            return None
         if len(text) >= 12 and (
             text[:7].lower() == "bearer "
             or text.startswith(("sk-", "ck_", "xai-", "AIza", "AQ."))
@@ -329,7 +348,13 @@ def _panel_clean(value: object, depth: int = 0) -> object:
             return None
         return value[:512]
     if isinstance(value, list):
-        return [_panel_clean(item, depth + 1) for item in value[:32]]
+        cleaned = []
+        for item in value[:32]:
+            child = _panel_clean(item, depth + 1)
+            if child is None and isinstance(item, str):
+                continue
+            cleaned.append(child)
+        return cleaned
     if isinstance(value, dict):
         cleaned: dict[str, object] = {}
         for key, item in list(value.items())[:64]:
@@ -542,14 +567,25 @@ def _action_of(body: dict) -> str:
     return str(body.get("action") or body.get("verb") or "").strip()
 
 
+def _v1_post(body: dict | None) -> bool:
+    """<solaro-account> writes. GET /v1/* stays readable without the boot token."""
+    if not isinstance(body, dict):
+        return False
+    panel = str(body.get("path") or "")
+    method = str(body.get("method") or "").upper()
+    return panel.startswith("/v1/") and method == "POST"
+
+
 def _token_mutation(path: str, body: dict | None) -> bool:
     """Browser-facing writes. A missing token is refused when Origin is set."""
     if path == "/api/shutdown":
         return True
+    if _v1_post(body):
+        return True
     if path != "/api/run" or not isinstance(body, dict):
         return False
     action = _action_of(body)
-    if action in ("handoff", "strip", "open_folder"):
+    if action in ("handoff", "strip", "open_folder", "export", "import", "convert", "index", "anonymize"):
         return True
     if action == "resume" and body.get("launch") is True:
         return True
@@ -561,10 +597,14 @@ def _token_mutation(path: str, body: dict | None) -> bool:
 def _rate_mutation(path: str, body: dict | None) -> bool:
     if path == "/api/shutdown":
         return True
+    if _v1_post(body):
+        return True
     if not isinstance(body, dict):
         return False
     action = _action_of(body)
-    if action in ("handoff", "strip", "export", "import", "convert", "open_folder"):
+    if action in (
+        "handoff", "strip", "export", "import", "convert", "index", "anonymize", "open_folder",
+    ):
         return True
     if action == "resume" and body.get("launch") is True:
         return True

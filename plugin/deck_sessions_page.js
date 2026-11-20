@@ -36,7 +36,7 @@
       bar.appendChild(btn);
     });
     host.appendChild(bar);
-    paint(host, "Sessions page tools. Start sessions_page.py serve, then use these buttons. The installed app is the desk window and does not need this port.");
+    paint(host, "Sessions page tools. The packaged app serves the loopback page on ports 8786–8795. This cDeck plugin connects to 127.0.0.1:8786 when that page is running.");
   }
 
   if (document.readyState === "loading") {

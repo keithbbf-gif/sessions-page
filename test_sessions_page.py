@@ -9,10 +9,12 @@ import os
 import re
 import socket
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
 import time
+import types
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -105,6 +107,347 @@ def _fixture(root: Path) -> None:
     desk = root / "desktop"
     desk.mkdir()
     (desk / "note.jsonl").write_text('{"type":"user","message":{"content":"desktop"}}\n', encoding="utf-8")
+
+
+def _link_dir(link: Path, target: Path) -> bool:
+    """Directory junction, or a symlink when the platform allows it."""
+    if os.name == "nt":
+        proc = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True, text=True,
+        )
+        if proc.returncode == 0:
+            return True
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        return False
+    return True
+
+
+def _unlink_dir(link: Path) -> None:
+    try:
+        if hasattr(os.path, "isjunction") and os.path.isjunction(link):
+            os.rmdir(link)
+            return
+    except OSError:
+        pass
+    try:
+        if link.is_symlink():
+            link.unlink()
+    except OSError:
+        pass
+
+
+def _refused(op) -> str:
+    try:
+        op()
+    except engine.PageError as exc:
+        return exc.kind
+    return "OPENED"
+
+
+def _case_security(root: Path, homes: dict, check) -> None:
+    """Junction escape, late legal marks, catalog scrub, and the CSRF gate."""
+    links: list[Path] = []
+    try:
+        outside = root / "outside-store"
+        jcur = "16161616-3434-5656-7878-909090909091"
+        jgrok = "17171717-3434-5656-7878-909090909091"
+        jcodex = "18181818-3434-5656-7878-909090909091"
+        cur_target = outside / "cursor-ws" / "agent-transcripts" / jcur
+        cur_target.mkdir(parents=True)
+        cur_file = cur_target / f"{jcur}.jsonl"
+        cur_file.write_text(
+            '{"type":"user","message":{"content":"junction secret"}}\n',
+            encoding="utf-8",
+        )
+        cur_link = root / "cursor" / "projects" / "escape"
+        grok_target = outside / "grok-ses"
+        grok_target.mkdir(parents=True)
+        (grok_target / "summary.json").write_text(json.dumps({
+            "info": {"id": jgrok, "cwd": r"V:\work", "generated_title": "escaped"},
+        }), encoding="utf-8")
+        grok_file = grok_target / "chat_history.jsonl"
+        grok_file.write_text('{"type":"user","text":"junction secret"}\n', encoding="utf-8")
+        grok_link = root / "grok" / "escape-link"
+        codex_target = outside / "codex-ses"
+        codex_target.mkdir(parents=True)
+        codex_name = f"rollout-2026-09-01T00-00-00-{jcodex}.jsonl"
+        codex_file = codex_target / codex_name
+        codex_file.write_text('{"type":"response_item","payload":{"role":"user","content":"secret"}}\n', encoding="utf-8")
+        codex_link = root / "codex" / "sessions" / "escape"
+        made = []
+        for link, target in (
+            (cur_link, outside / "cursor-ws"),
+            (grok_link, grok_target),
+            (codex_link, codex_target),
+        ):
+            if _link_dir(link, target):
+                links.append(link)
+                made.append(link)
+        if len(made) != 3:
+            check("reparse escape is not listed or opened", lambda: os.name != "nt")
+        else:
+            found = engine.find(homes=homes, limit=400)
+            vendors = {hit.get("vendor_id") for hit in found["hits"]}
+            opened = [
+                _refused(lambda p=path: engine.preview(str(p), homes=homes))
+                for path in (
+                    cur_link / "agent-transcripts" / jcur / f"{jcur}.jsonl",
+                    grok_link / "chat_history.jsonl",
+                    codex_link / codex_name,
+                )
+            ]
+            opened += [
+                _refused(lambda p=path: engine.dispatch("load", {"id": str(p)}, homes=homes))
+                for path in (
+                    cur_link / "agent-transcripts" / jcur / f"{jcur}.jsonl",
+                    grok_link / "chat_history.jsonl",
+                    codex_link / codex_name,
+                )
+            ]
+            opened += [
+                _refused(lambda p=path: engine.export_md(str(p), root / "junction-out", homes=homes))
+                for path in (
+                    cur_link / "agent-transcripts" / jcur / f"{jcur}.jsonl",
+                    grok_link / "chat_history.jsonl",
+                    codex_link / codex_name,
+                )
+            ]
+            check("reparse escape is not listed or opened",
+                  lambda: jcur not in vendors and jgrok not in vendors and jcodex not in vendors
+                  and UUID in vendors
+                  and all("outside-store" not in str(hit.get("path") or "") for hit in found["hits"])
+                  and opened
+                  and all(kind in ("NOT_FOUND", "LEGAL_OMITTED") for kind in opened))
+
+        sid = "hm-late"
+        hermes = root / "hermes-late" / "state.db"
+        hermes.parent.mkdir(parents=True)
+        con = sqlite3.connect(hermes)
+        con.execute(
+            "CREATE TABLE sessions ("
+            "id TEXT, title TEXT, display_name TEXT, cwd TEXT, "
+            "last_activity_at REAL, hidden INTEGER)"
+        )
+        con.execute(
+            "INSERT INTO sessions (id, title, display_name, cwd, last_activity_at, hidden) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (sid, "hermes title", "", str(hermes.parent), 100, 0),
+        )
+        con.execute(
+            "CREATE TABLE messages (session_id TEXT, role TEXT, content TEXT, timestamp REAL)"
+        )
+        for i in range(30):
+            con.execute(
+                "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+                (sid, "user", f"plain row {i}", i),
+            )
+        con.execute(
+            "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+            (sid, "user", r"notes at V:\AI\Legal\hidden", 31),
+        )
+        con.commit()
+        con.close()
+        sample = engine._sqlite_sample_text(hermes)
+        hermes_homes = dict(homes)
+        hermes_homes["hermes"] = hermes
+        hermes_id = f"hm-{sid}"
+        hermes_kinds = [
+            _refused(lambda: engine.preview(hermes_id, homes=hermes_homes)),
+            _refused(lambda: engine.dispatch("load", {"id": hermes_id}, homes=hermes_homes)),
+            _refused(lambda: engine.export_md(hermes_id, root / "hermes-out", homes=hermes_homes)),
+        ]
+        check("a legal cell past the sqlite sample is omitted",
+              lambda: "Legal" not in sample
+              and hermes_kinds == ["LEGAL_OMITTED", "LEGAL_OMITTED", "LEGAL_OMITTED"]
+              and not (root / "hermes-out").exists())
+
+        deep_id = "99999999-9999-9999-9999-999999999999"
+        deep_dir = root / "claude" / "projects" / "V-deep-body"
+        deep_dir.mkdir(parents=True)
+        line = json.dumps({"type": "user", "message": {"role": "user", "content": "hello"}}) + "\n"
+        raw_line = line.encode("utf-8")
+        blob = raw_line * ((engine._LEGAL_SCAN // len(raw_line)) + 4)
+        marker = json.dumps({
+            "type": "user",
+            "message": {"role": "user", "content": r"see V:\AI\Legal\notes"},
+        }).encode("utf-8") + b"\n"
+        raw = blob + marker
+        deep_file = deep_dir / f"{deep_id}.jsonl"
+        deep_file.write_bytes(raw)
+        deep_rec = f"cc-{deep_id}"
+        deep_kinds = [
+            _refused(lambda: engine.preview(deep_rec, homes=homes)),
+            _refused(lambda: engine.dispatch("load", {"id": deep_rec}, homes=homes)),
+            _refused(lambda: engine.export_md(deep_rec, root / "deep-out", homes=homes)),
+        ]
+        check("a legal marker past 512 KiB of jsonl is omitted",
+              lambda: raw.find(b"Legal") > engine._LEGAL_SCAN
+              and deep_kinds == ["LEGAL_OMITTED", "LEGAL_OMITTED", "LEGAL_OMITTED"]
+              and not (root / "deep-out").exists())
+
+        zst_kinds = ["SKIP"]
+        zst_head = ""
+        try:
+            from compression import zstd
+        except ImportError:
+            zst = None
+        else:
+            uid = "abababab-1212-3434-5656-787878787878"
+            zhome = root / "codex-legal-zst"
+            missing = zhome / "sessions" / f"rollout-2026-11-05T01-02-03-{uid}.jsonl"
+            packed = Path(str(missing) + ".zst")
+            packed.parent.mkdir(parents=True)
+            zline = (
+                b'{"type":"response_item","payload":{"role":"user","content":'
+                b'[{"type":"input_text","text":"hello"}]}}\n'
+            )
+            zmark = json.dumps({
+                "type": "response_item",
+                "payload": {"role": "user", "content": [
+                    {"type": "input_text", "text": r"V:\AI\Legal\notes"},
+                ]},
+            }).encode("utf-8") + b"\n"
+            zraw = zline * ((256 * 1024) // len(zline) + 3) + zmark
+            packed.write_bytes(zstd.compress(zraw))
+            zdb = zhome / "state_5.sqlite"
+            zcon = sqlite3.connect(zdb)
+            zcon.execute("CREATE TABLE threads (id TEXT, cwd TEXT, title TEXT, rollout_path TEXT)")
+            zcon.execute(
+                "INSERT INTO threads (id, cwd, title, rollout_path) VALUES (?, ?, ?, ?)",
+                (uid, str(zhome), "packed", str(missing)),
+            )
+            zcon.commit()
+            zcon.close()
+            zst_head = engine._zstd_head_text(packed)
+            zhomes = dict(homes)
+            zhomes["codex"] = zhome
+            zid = f"cdx-{uid}"
+            zst_kinds = [
+                _refused(lambda: engine.preview(zid, homes=zhomes)),
+                _refused(lambda: engine.dispatch("load", {"id": zid}, homes=zhomes)),
+                _refused(lambda: engine.export_md(zid, root / "zst-out", homes=zhomes)),
+            ]
+            zst = zraw
+        check("a legal marker past 256 KiB of jsonl.zst is omitted",
+              lambda: zst_kinds == ["LEGAL_OMITTED", "LEGAL_OMITTED", "LEGAL_OMITTED"]
+              and "Legal" in zst_head
+              and (zst is None or zst.find(b"Legal") > 256 * 1024))
+
+        saved_ready = sessions_page._SOLARO_READY
+        saved_core = sys.modules.get("solaro_core")
+        saved_mdata = sys.modules.get("solaro_core.mdata")
+        fake_core = types.ModuleType("solaro_core")
+        fake_mdata = types.ModuleType("solaro_core.mdata")
+
+        def _fake_status(refresh=False):
+            return {
+                "status": "ok",
+                "axes": {"n": 2, "labels": ["public"]},
+                "api_key": "sk-" + ("a" * 20),
+                "token": "sekret-value",
+                "note": "bearer " + ("b" * 20),
+                "cache": r"C:\Users\secret\cache.json",
+                "models": ["grok-test", 3],
+            }
+
+        fake_mdata.mdata_status = _fake_status
+        sys.modules["solaro_core"] = fake_core
+        sys.modules["solaro_core.mdata"] = fake_mdata
+        sessions_page._SOLARO_READY = True
+        try:
+            catalog = sessions_page._mdata_status({})
+        finally:
+            sessions_page._SOLARO_READY = saved_ready
+            if saved_core is None:
+                sys.modules.pop("solaro_core", None)
+            else:
+                sys.modules["solaro_core"] = saved_core
+            if saved_mdata is None:
+                sys.modules.pop("solaro_core.mdata", None)
+            else:
+                sys.modules["solaro_core.mdata"] = saved_mdata
+        check("mdata status drops secrets and filesystem paths",
+              lambda: catalog.get("kind") == "OK" and catalog.get("status") == "ok"
+              and catalog.get("axes", {}).get("n") == 2
+              and catalog.get("models") == ["grok-test", 3]
+              and "api_key" not in catalog and "token" not in catalog
+              and "note" not in catalog and "cache" not in catalog
+              and "secret" not in json.dumps(catalog).lower()
+              and ":\\" not in json.dumps(catalog))
+
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        threading.Thread(target=sessions_page._serve, args=(port,), daemon=True).start()
+        page = None
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                page = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=0.5).read().decode("utf-8")
+                break
+            except Exception:
+                time.sleep(0.05)
+        token_match = re.search(r'<meta name="cm-token" content="([0-9a-fA-F]+)">', page or "")
+        token = token_match.group(1) if token_match else ""
+        store = root / "csrf-grok"
+        box = store / "box" / UUID
+        box.mkdir(parents=True)
+        (box / "summary.json").write_text(json.dumps({
+            "info": {"id": UUID, "cwd": r"V:\work", "generated_title": "csrf"},
+        }), encoding="utf-8")
+        (box / "chat_history.jsonl").write_text(
+            '{"type":"user","text":"csrf hello"}\n', encoding="utf-8",
+        )
+        out = root / "csrf-out"
+
+        def post(body, headers):
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/run",
+                data=json.dumps(body).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=5) as res:
+                    return res.status, res.read()
+            except urllib.error.HTTPError as exc:
+                return exc.code, exc.read()
+
+        evil = {"Content-Type": "application/json", "Origin": "http://evil.example"}
+        authed = dict(evil)
+        authed["X-CM-Token"] = token
+        bare = {"Content-Type": "application/json"}
+        calls = [
+            {"action": "export", "id": f"grok-{UUID}", "store": str(store), "out": str(out / "exp")},
+            {"action": "import", "id": f"grok-{UUID}", "store": str(store), "out": str(out / "imp")},
+            {"action": "index", "store": str(store), "out": str(out / "index.jsonl")},
+            {"path": "/v1/account", "method": "POST", "body": {}},
+        ]
+        denied = [post(body, evil) for body in calls]
+        allowed = [post(body, authed) for body in calls]
+        headless, _headless_body = post({"action": "export"}, bare)
+        get_code, _get_body = post({"path": "/v1/account", "method": "GET"}, evil)
+        check("cross-origin mutations require the boot token",
+              lambda: bool(token)
+              and all(code == 403 and b"FORBIDDEN" in body for code, body in denied)
+              and all(code == 200 for code, _body in allowed)
+              and headless != 403
+              and get_code == 200)
+        try:
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/api/shutdown",
+                data=b"{}",
+                timeout=1,
+            )
+        except Exception:
+            pass
+    finally:
+        for link in links:
+            _unlink_dir(link)
 
 
 def main() -> int:
@@ -1011,6 +1354,7 @@ def main() -> int:
         urllib.request.urlopen(f"http://127.0.0.1:{port}/api/shutdown", data=b"{}", timeout=1)
     except Exception:
         pass
+    check("security cases finished", lambda: _case_security(root, homes, check) is None)
     import shutil
     shutil.rmtree(root, ignore_errors=True)
 
