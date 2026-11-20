@@ -185,7 +185,7 @@ class Sheets:
         self.chain_model.pack(side="left", padx=(0, 12))
         self.desk._button(chain, "Load", self.desk._on_load).pack(side="left", padx=2)
         self.desk._button(chain, "Preview", self.desk._on_preview).pack(side="left", padx=2)
-        self.desk._button(chain, "Hand off", self.desk._on_resume).pack(side="left", padx=2)
+        self.desk._button(chain, "Hand off", self.desk._on_handoff).pack(side="left", padx=2)
         self.desk._button(chain, "Import", self.desk._on_import).pack(side="left", padx=2)
         self.desk._button(chain, "Export", self.desk._on_export).pack(side="left", padx=2)
         self.desk._button(chain, "Index", self.desk._on_index).pack(side="left", padx=2)

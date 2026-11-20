@@ -6,6 +6,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import socket
 import sqlite3
 import sys
@@ -700,6 +701,174 @@ def main() -> int:
     ui = sessions_page._ui_dir()
     check("ui files exist", lambda: (ui / "index.html").is_file() and (ui / "app.js").is_file())
 
+    chat = root / "grok" / "Vwork" / UUID / "chat_history.jsonl"
+    in_home = engine._by_id(homes, str(chat))
+    claude_file = root / "claude" / "projects" / "V-work" / f"{CLAUDE[:-1]}a.jsonl"
+    in_claude = engine._by_id(homes, str(claude_file))
+    rollout = root / "codex" / "sessions" / "2026" / f"rollout-2026-09-01T00-00-00-{CODEX}.jsonl"
+    in_codex = engine._by_id(homes, str(rollout))
+    outside = root / "outside"
+    outside.mkdir()
+    outside_uuid = outside / f"{UUID}.jsonl"
+    outside_uuid.write_text('{"type":"user","message":{"content":"secret"}}\n', encoding="utf-8")
+    outside_roll = outside / f"rollout-2026-09-01T00-00-00-{CODEX}.jsonl"
+    outside_roll.write_text("{}\n", encoding="utf-8")
+    outside_chat = outside / "chat_history.jsonl"
+    outside_chat.write_text('{"type":"user","text":"secret"}\n', encoding="utf-8")
+    outside_kinds = []
+    for outsider in (outside_uuid, outside_roll, outside_chat):
+        try:
+            engine._by_id(homes, str(outsider))
+            outside_kinds.append("ACCEPTED")
+        except engine.PageError as exc:
+            outside_kinds.append(exc.kind)
+    link = root / "claude" / "projects" / "V-work" / f"{UUID}.jsonl"
+    link_kind = "UNTRIED"
+    try:
+        link.symlink_to(outside_uuid)
+    except OSError as exc:
+        link_kind = f"SKIP {type(exc).__name__}"
+    else:
+        try:
+            engine._by_id(homes, str(link))
+            link_kind = "ACCEPTED"
+        except engine.PageError as exc:
+            link_kind = exc.kind
+        direct = engine._hit_from_file(link)
+        if direct is not None:
+            link_kind = "HIT"
+    check("in-home session files resolve and outside files do not",
+          lambda: in_home["vendor_id"] == UUID and in_claude["vendor_id"] == f"{CLAUDE[:-1]}a"
+          and in_codex["vendor_id"] == CODEX
+          and outside_kinds == ["NOT_FOUND", "NOT_FOUND", "NOT_FOUND"]
+          and (link_kind == "NOT_FOUND" or link_kind.startswith("SKIP")))
+
+    cow_root = root / "cow-escape"
+    (cow_root / "ordered_transcripts").mkdir(parents=True)
+    (cow_root / "ordered_transcripts" / "ok.md").write_text("## [1] USER\nhi\n", encoding="utf-8")
+    secret_md = outside / "secret.md"
+    secret_md.write_text("SECRET", encoding="utf-8")
+    (cow_root / "COW_SESSION_CATALOG.json").write_text(json.dumps([
+        {"seq": 1, "filename": "ok.md", "stream": "cm", "session_id": "safe", "title": "safe"},
+        {"seq": 2, "filename": str(secret_md), "stream": "cm", "session_id": "abs", "title": "abs"},
+        {"seq": 3, "filename": "..\\..\\outside\\secret.md", "stream": "cm", "session_id": "rel", "title": "rel"},
+    ]), encoding="utf-8")
+    esc_homes = {name: None for name in engine.HARNESSES}
+    esc_homes["cowork"] = cow_root
+    escaped = engine.find(homes=esc_homes, limit=20)
+    cow_paths = [Path(hit["path"]).resolve() for hit in escaped["hits"] if hit.get("harness") == "cowork"]
+    check("cowork filename cannot leave the store",
+          lambda: cow_paths and all(path != secret_md.resolve() for path in cow_paths)
+          and any(hit.get("vendor_id") == "safe" and str(hit.get("path") or "").endswith("ok.md")
+                  for hit in escaped["hits"]))
+
+    codex_root = root / "codex-escape"
+    (codex_root / "sessions").mkdir(parents=True)
+    secret_jsonl = outside / "secret.jsonl"
+    secret_jsonl.write_text('{"secret":true}\n', encoding="utf-8")
+    ext_db = codex_root / "state_5.sqlite"
+    ext_con = sqlite3.connect(ext_db)
+    ext_con.execute("CREATE TABLE threads (id TEXT, cwd TEXT, title TEXT, rollout_path TEXT)")
+    ext_con.execute(
+        "INSERT INTO threads VALUES (?, ?, ?, ?)",
+        ("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", str(codex_root), "ext", str(secret_jsonl)),
+    )
+    ext_con.execute(
+        "INSERT INTO threads VALUES (?, ?, ?, ?)",
+        ("bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee", str(codex_root), "dot", str(codex_root / ".." / "outside" / "secret.jsonl")),
+    )
+    ext_con.commit()
+    ext_con.close()
+    codex_homes = {name: None for name in engine.HARNESSES}
+    codex_homes["codex"] = codex_root
+    codex_hits = [hit for hit in engine.find(homes=codex_homes, limit=20)["hits"] if hit.get("harness") == "codex"]
+    check("codex rollout_path outside the home falls back to the db",
+          lambda: len(codex_hits) == 2
+          and all(Path(hit["path"]).resolve() == ext_db.resolve() for hit in codex_hits)
+          and all(Path(hit["path"]).resolve() != secret_jsonl.resolve() for hit in codex_hits))
+
+    late_id = "abababab-abab-abab-abab-abababababab"
+    late_dir = root / "claude" / "projects" / "V-late"
+    late_dir.mkdir(parents=True)
+    pad_line = json.dumps({"type": "system", "message": {"role": "system", "content": "padding"}}) + "\n"
+    pad = pad_line * ((engine.HEAD_BYTES // len(pad_line)) + 3)
+    user_line = json.dumps({
+        "type": "user",
+        "message": {"role": "user", "content": r"see V:\AI\Legal\notes"},
+    }) + "\n"
+    late_raw = (pad + user_line).encode("utf-8")
+    (late_dir / f"{late_id}.jsonl").write_bytes(late_raw)
+    late_found = engine.find(homes=homes, limit=200)
+    late_hit = next(hit for hit in late_found["hits"] if hit.get("vendor_id") == late_id)
+    late_kind = ""
+    try:
+        engine.preview(late_hit["id"], homes=homes)
+    except engine.PageError as exc:
+        late_kind = exc.kind
+    check("a legal marker past the header is blanked and preview refuses it",
+          lambda: b"Legal" not in late_raw[:engine.HEAD_BYTES]
+          and late_hit["legal"] is True and late_hit["title"] == ""
+          and late_kind == "LEGAL_OMITTED")
+
+    spawned = {"n": 0}
+    real_popen = engine.subprocess.Popen
+
+    def _blocked_popen(*_args, **_kwargs):
+        spawned["n"] += 1
+        raise OSError("blocked")
+
+    engine.subprocess.Popen = _blocked_popen
+    launch_kind = ""
+    omitted = None
+    none_launch = None
+    try:
+        try:
+            engine.dispatch("resume", {"id": f"grok-{UUID}", "launch": "false"}, homes=homes)
+        except engine.PageError as exc:
+            launch_kind = exc.kind
+        omitted = engine.dispatch("resume", {"id": f"grok-{UUID}"}, homes=homes)
+        none_launch = engine.dispatch("resume", {"id": f"grok-{UUID}", "launch": None}, homes=homes)
+    finally:
+        engine.subprocess.Popen = real_popen
+    check("a string launch is bad input and does not spawn",
+          lambda: launch_kind == "BAD_INPUT" and spawned["n"] == 0
+          and omitted is not None and omitted["gate"]["launched"] is False
+          and none_launch is not None and none_launch["gate"]["launched"] is False)
+
+    handoff_log = engine.var_dir() / "handoffs.jsonl"
+    handoff_before = handoff_log.read_bytes() if handoff_log.is_file() else None
+    handoff_existed = handoff_log.is_file()
+    spawned["n"] = 0
+    engine.subprocess.Popen = _blocked_popen
+    handed = None
+    try:
+        handed = engine.dispatch("handoff", {
+            "id": f"grok-{UUID}",
+            "target": "nonexistent_tool",
+            "out": str(root / "handoff-out"),
+        }, homes=homes)
+    finally:
+        engine.subprocess.Popen = real_popen
+    handoff_after = handoff_log.read_bytes() if handoff_log.is_file() else b""
+    before_lines = [] if handoff_before is None else [ln for ln in handoff_before.splitlines() if ln.strip()]
+    after_lines = [ln for ln in handoff_after.splitlines() if ln.strip()]
+    handoff_row = json.loads(after_lines[-1].decode("utf-8")) if len(after_lines) == len(before_lines) + 1 else {}
+    if handoff_existed and handoff_before is not None:
+        handoff_log.write_bytes(handoff_before)
+    elif handoff_log.is_file():
+        handoff_log.unlink()
+    export_path = ""
+    if isinstance(handed, dict) and isinstance(handed.get("gate"), dict):
+        export_path = str(handed["gate"].get("export") or "")
+    check("handoff exports once, records one line, and spawns nothing",
+          lambda: handed is not None and handed.get("verb") == "handoff"
+          and handed.get("kind") == "BINARY_ABSENT"
+          and export_path.endswith(".md") and Path(export_path).is_file()
+          and spawned["n"] == 0
+          and handoff_row.get("target") == "nonexistent_tool"
+          and handoff_row.get("parent") == f"grok-{UUID}"
+          and len(after_lines) == len(before_lines) + 1)
+
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
@@ -747,6 +916,44 @@ def main() -> int:
     conn.close()
     check("a negative content length is refused",
           lambda: refused.status == 400 and b"BAD_REQUEST" in refused_body)
+
+    def post_raw(path, payload, headers):
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}",
+            data=payload,
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as res:
+                return res.status, res.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read()
+
+    leak_code, leak_body = post_raw("/api/run", json.dumps({
+        "action": r"C:\Users\secret\V:\hidden",
+    }).encode("utf-8"), {"Content-Type": "application/json"})
+    leak_text = leak_body.decode("utf-8", errors="replace")
+    check("a 400 error body contains no filesystem path",
+          lambda: leak_code == 400 and '"error": "BAD_ACTION"' in leak_text
+          and "C:\\" not in leak_text and "V:\\" not in leak_text and "/Users/" not in leak_text)
+
+    token_match = re.search(r'<meta name="cm-token" content="([0-9a-fA-F]+)">', page or "")
+    token = token_match.group(1) if token_match else ""
+    origin = {"Content-Type": "application/json", "Origin": "http://127.0.0.1"}
+    bad_origin = dict(origin)
+    bad_origin["X-CM-Token"] = "0" * 48
+    launch_body = json.dumps({"action": "resume", "id": "missing-session", "launch": True}).encode("utf-8")
+    shut_missing, shut_missing_body = post_raw("/api/shutdown", b"{}", origin)
+    shut_bad, shut_bad_body = post_raw("/api/shutdown", b"{}", bad_origin)
+    run_missing, run_missing_body = post_raw("/api/run", launch_body, origin)
+    run_bad, run_bad_body = post_raw("/api/run", launch_body, bad_origin)
+    check("origin without a boot token is forbidden",
+          lambda: token and shut_missing == 403 and shut_bad == 403
+          and run_missing == 403 and run_bad == 403
+          and b"FORBIDDEN" in shut_missing_body and b"FORBIDDEN" in run_missing_body
+          and b"Invalid or missing session token." in shut_bad_body
+          and b"Invalid or missing session token." in run_bad_body)
     places = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/places", timeout=5).read().decode("utf-8"))
     check("places lists drives and default locations before a count",
           lambda: isinstance(places.get("drives"), list) and len(places["drives"]) >= 1
@@ -762,6 +969,43 @@ def main() -> int:
     check("plugin mounts one id and does not call Core",
           lambda: 'getElementById("panel-sessions-page")' in plugin and "cosmos_service" not in plugin
           and "/api/v1/" not in plugin)
+
+    sock2 = socket.socket()
+    sock2.bind(("127.0.0.1", 0))
+    port2 = sock2.getsockname()[1]
+    sock2.close()
+    threading.Thread(target=sessions_page._serve, args=(port2,), daemon=True).start()
+    page2 = None
+    deadline2 = time.time() + 5
+    while time.time() < deadline2:
+        try:
+            page2 = urllib.request.urlopen(f"http://127.0.0.1:{port2}/", timeout=0.5).read().decode("utf-8")
+            break
+        except Exception:
+            time.sleep(0.05)
+    token2_match = re.search(r'<meta name="cm-token" content="([0-9a-fA-F]+)">', page2 or "")
+    token2 = token2_match.group(1) if token2_match else ""
+    token_req = urllib.request.Request(
+        f"http://127.0.0.1:{port2}/api/shutdown",
+        data=b"{}",
+        headers={
+            "Content-Type": "application/json",
+            "Origin": "http://127.0.0.1",
+            "X-CM-Token": token2,
+        },
+        method="POST",
+    )
+    token_code = None
+    token_body = b""
+    try:
+        with urllib.request.urlopen(token_req, timeout=5) as res:
+            token_code = res.status
+            token_body = res.read()
+    except urllib.error.HTTPError as exc:
+        token_code = exc.code
+        token_body = exc.read()
+    check("the boot token from the page allows shutdown",
+          lambda: bool(token2) and token_code == 200 and b'"kind": "OK"' in token_body)
 
     try:
         urllib.request.urlopen(f"http://127.0.0.1:{port}/api/shutdown", data=b"{}", timeout=1)

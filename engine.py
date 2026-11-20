@@ -30,6 +30,10 @@ MAX_BYTES = 48 * 1024 * 1024
 SESSION_CAP = 2000
 SUMMARY_CAP = 4000
 HEAD_BYTES = 8192
+# Same window preview already treats as "the whole small file", so a legal
+# marker past the 8KB header cannot survive an open.
+_LEGAL_SCAN = 512 * 1024
+_ZSTD_SCAN = 256 * 1024
 PREVIEW_WHOLE = 512 * 1024
 DEFAULT_LIMIT = 200
 
@@ -262,6 +266,28 @@ def _blocked_tree(path: str | Path) -> bool:
     except OSError:
         return False
     return _is_windows_tree(resolved)
+
+
+def _path_inside(path: Path, root: Path) -> bool:
+    """True when path resolves inside root. A broken path is outside."""
+    try:
+        return path.resolve().is_relative_to(Path(root).resolve())
+    except (OSError, ValueError):
+        return False
+
+
+def _within_homes(path: Path, homes: dict | None) -> bool:
+    """A real file under one configured home. Symlinks and C:\\Windows are out."""
+    if not _is_real_file(path) or _blocked_tree(path):
+        return False
+    if not isinstance(homes, dict):
+        return False
+    for root in homes.values():
+        if root is None:
+            continue
+        if _path_inside(path, Path(root)):
+            return True
+    return False
 
 
 def _prune_dirs(dirpath: str, dirnames: list[str], skip: tuple[str, ...] = ()) -> None:
@@ -1346,6 +1372,31 @@ def _enum_codex(root: Path) -> list[dict]:
     return hits
 
 
+def _codex_rollout_allowed(cand: Path, root: Path) -> bool:
+    """A rollout path the db may name.
+
+    A missing file that still resolves under the codex root is kept so the
+    session index can repair it. An outside path, a symlink, or a blocked
+    tree falls back to the db.
+    """
+    if _blocked_tree(cand):
+        return False
+    try:
+        if cand.is_symlink():
+            return False
+    except OSError:
+        return False
+    if not _path_inside(cand, root):
+        return False
+    try:
+        exists = cand.exists()
+    except OSError:
+        return False
+    if exists:
+        return _is_real_file(cand)
+    return True
+
+
 def _enum_codex_db(db: Path) -> list[dict]:
     hits = []
     con = None
@@ -1370,8 +1421,13 @@ def _enum_codex_db(db: Path) -> list[dict]:
                 pass
             del con
             gc.collect()
+    codex_root = db.parent
     for sid, cwd, title, rollout in rows:
-        path = Path(rollout) if rollout else db
+        path = db
+        if rollout:
+            cand = Path(os.fspath(rollout))
+            if _codex_rollout_allowed(cand, codex_root):
+                path = cand
         hits.append(_hit(
             harness="codex", vendor_id=str(sid), path=path,
             cwd=str(cwd or ""), title=str(title or ""), updated=_mtime(path if path.is_file() else db),
@@ -1547,10 +1603,12 @@ def _enum_cowork(store: Path) -> list[dict]:
         sid = str(row.get("session_id") or row.get("seq") or "")
         filename = str(row.get("filename") or "")
         md = None
-        if filename:
+        # An absolute filename is a different tree. A relative name must still
+        # resolve inside the catalog directory (Windows .. joins escape otherwise).
+        if filename and not Path(filename).is_absolute():
             for base in (cat.parent / "ordered_transcripts", store if store.is_dir() else cat.parent):
                 candidate = base / filename
-                if candidate.is_file():
+                if _is_real_file(candidate) and not _blocked_tree(candidate) and _path_inside(candidate, base):
                     md = candidate
                     break
         seq = row.get("seq")
@@ -2561,15 +2619,21 @@ def _match(hit: dict, query: str, harness: str, cwd: str) -> bool:
     return needle in hay
 
 
+def _blank_legal(row: dict) -> None:
+    """Blank one row and the remembered copy so find and preview agree."""
+    row["legal"] = True
+    row["title"] = ""
+    row["cwd"] = ""
+    _remember_legal(row)
+
+
 def _enrich(rows: list[dict]) -> None:
     """Titles for the rows on screen. Legal rows stay blank and unopened."""
     for row in rows:
         path = Path(row.get("path") or "")
         stream = row.get("stream") or ""
         if row.get("legal") or is_legal(str(path), stream, row.get("cwd") or "", row.get("title") or ""):
-            row["legal"] = True
-            row["title"] = ""
-            row["cwd"] = ""
+            _blank_legal(row)
             continue
         if _is_windows_tree(path) or _blocked_tree(path):
             continue
@@ -2588,9 +2652,7 @@ def _enrich(rows: list[dict]) -> None:
             if not title:
                 title = sniffed_title
         if is_legal(str(path), stream, cwd or row.get("cwd") or "", title or ""):
-            row["legal"] = True
-            row["title"] = ""
-            row["cwd"] = ""
+            _blank_legal(row)
             continue
         if not title:
             title = _first_user_title(path)
@@ -2599,9 +2661,7 @@ def _enrich(rows: list[dict]) -> None:
         if title:
             row["title"] = title
         if is_legal(str(path), stream, row.get("cwd") or "", row.get("title") or ""):
-            row["legal"] = True
-            row["title"] = ""
-            row["cwd"] = ""
+            _blank_legal(row)
 
 
 def _drive_prefix(drive: str) -> str:
@@ -2632,6 +2692,25 @@ def _on_drive(hit: dict, drive: str) -> bool:
 
 _live_lock = threading.Lock()
 _live_rows: dict = {"key": None, "at": 0.0, "hits": [], "failed": {}}
+
+
+def _remember_legal(hit: dict) -> None:
+    """Copy a legal blank onto the live row find already stored.
+
+    Enrich mutates a copy. Preview looks up the stored row, so the blank has
+    to land there too. find(enrich=False) does not call this.
+    """
+    want = str(hit.get("id") or "")
+    if not want:
+        return
+    path = hit.get("path")
+    with _live_lock:
+        for row in _live_rows.get("hits") or []:
+            if str(row.get("id") or "") == want and row.get("path") == path:
+                row["legal"] = True
+                row["title"] = ""
+                row["cwd"] = ""
+                return
 
 
 def _homes_key(homes: dict) -> tuple:
@@ -2760,7 +2839,7 @@ def _by_id(homes: dict, rec_id: str) -> dict:
         if aliases.get("opencode_id") == want:
             return hit
     path = Path(want)
-    if path.is_file():
+    if _within_homes(path, homes):
         found = _hit_from_file(path)
         if found is not None:
             return found
@@ -2768,6 +2847,8 @@ def _by_id(homes: dict, rec_id: str) -> dict:
 
 
 def _hit_from_file(path: Path) -> dict | None:
+    if not _is_real_file(path):
+        return None
     parent = path.parent
     if path.name == "chat_history.jsonl" and (parent / "summary.json").is_file():
         rows = _enum_grok(parent)
@@ -3103,15 +3184,158 @@ def _guard_size(path: Path) -> int:
     return size
 
 
+_SQL_TEXT = (".db", ".sqlite", ".sqlite3")
+_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _read_head_text(path: Path, limit: int) -> str:
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(limit)
+    except OSError:
+        return ""
+    return raw.decode("utf-8", errors="replace")
+
+
+def _zstd_head_text(path: Path, limit: int = _ZSTD_SCAN) -> str:
+    """First decompressed bytes, or empty when zstd is missing or the frame is not."""
+    dec_mod = None
+    try:
+        from compression import zstd as dec_mod
+    except ImportError:
+        try:
+            import zstandard as dec_mod  # type: ignore
+        except ImportError:
+            return ""
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(max(limit, 1))
+    except OSError:
+        return ""
+    out = b""
+    try:
+        if hasattr(dec_mod, "ZstdDecompressor"):
+            dec = dec_mod.ZstdDecompressor()
+            try:
+                out = dec.decompress(raw, max_length=limit)
+            except TypeError:
+                out = dec.decompress(raw)
+        else:
+            out = dec_mod.decompress(raw)
+    except Exception:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return ""
+        if size > limit * 4:
+            return ""
+        try:
+            out = dec_mod.decompress(path.read_bytes())
+        except Exception:
+            return ""
+    if isinstance(out, str):
+        return out[:limit]
+    return bytes(out)[:limit].decode("utf-8", errors="replace")
+
+
+def _sqlite_sample_text(path: Path, limit: int = 8192) -> str:
+    """Table names and a short text sample. The connection always closes."""
+    chunks: list[str] = []
+    used = 0
+    con = None
+    try:
+        uri = path.resolve().as_uri() + "?mode=ro"
+        con = sqlite3.connect(uri, uri=True, timeout=1.0)
+        tables = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        names = [row[0] for row in tables if isinstance(row[0], str) and _IDENT.fullmatch(row[0])]
+        if names:
+            chunks.append(" ".join(names))
+            used += len(chunks[-1])
+        for name in names[:8]:
+            if used >= limit:
+                break
+            info = con.execute(f'PRAGMA table_info("{name}")').fetchall()
+            cols = []
+            for col in info:
+                col_name = col[1] if len(col) > 1 else ""
+                col_type = str(col[2] or "").upper() if len(col) > 2 else ""
+                if not isinstance(col_name, str) or not _IDENT.fullmatch(col_name):
+                    continue
+                if col_type == "" or any(tok in col_type for tok in ("CHAR", "CLOB", "TEXT", "BLOB", "STRING")):
+                    cols.append(col_name)
+            if not cols:
+                continue
+            col_sql = ", ".join(f'"{col}"' for col in cols[:4])
+            try:
+                rows = con.execute(f'SELECT {col_sql} FROM "{name}" LIMIT 20').fetchall()
+            except sqlite3.Error:
+                continue
+            for cells in rows:
+                for cell in cells:
+                    if isinstance(cell, bytes):
+                        piece = cell[:2000].decode("utf-8", errors="replace")
+                    elif isinstance(cell, str):
+                        piece = cell[:2000]
+                    else:
+                        continue
+                    chunks.append(piece)
+                    used += len(piece)
+                    if used >= limit:
+                        return "\n".join(chunks)[:limit]
+    except (sqlite3.Error, OSError, ValueError):
+        return "\n".join(chunks)[:limit]
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except sqlite3.Error:
+                pass
+            del con
+            gc.collect()
+    return "\n".join(chunks)[:limit]
+
+
+def _is_legal_file(path: Path, hit: dict) -> bool:
+    """Same legal marks find uses, including a marker past the 8KB header."""
+    stream = str(hit.get("stream") or "")
+    cwd = str(hit.get("cwd") or "")
+    title = str(hit.get("title") or "")
+    if is_legal(str(path), stream, cwd, title):
+        return True
+    if not _is_real_file(path):
+        return False
+    name = path.name.lower()
+    suffix = path.suffix.lower()
+    if name.endswith(".jsonl.zst"):
+        snippet = _zstd_head_text(path)
+        return bool(snippet) and is_legal(title=snippet)
+    if suffix in (".jsonl", ".json", ".md", ".txt"):
+        sniffed_cwd, sniffed_title = _sniff(path, HEAD_BYTES)
+        if is_legal(str(path), stream, sniffed_cwd or cwd, sniffed_title or title):
+            return True
+        if suffix in (".jsonl", ".json"):
+            user = _first_user_title(path)
+            if user and is_legal(str(path), stream, sniffed_cwd or cwd, user):
+                return True
+        snippet = _read_head_text(path, _LEGAL_SCAN)
+        return bool(snippet) and is_legal(title=snippet)
+    if suffix in _SQL_TEXT or name.endswith(".sqlite3"):
+        snippet = _sqlite_sample_text(path)
+        return bool(snippet) and is_legal(title=snippet)
+    return False
+
+
 def _open_hit(hit: dict) -> dict:
-    """Refuse a legal transcript before any full read. Header sniff only."""
-    if hit.get("legal"):
-        raise PageError("LEGAL_OMITTED", hit["id"])
+    """Refuse a legal transcript before any full read."""
     path = Path(hit.get("path") or "")
-    if path.is_file() and path.suffix.lower() in (".jsonl", ".json", ".md", ".txt"):
-        cwd, title = _sniff(path, HEAD_BYTES)
-        if is_legal(str(path), hit.get("stream") or "", cwd or hit.get("cwd") or "", title or hit.get("title") or ""):
-            raise PageError("LEGAL_OMITTED", hit["id"])
+    if hit.get("legal") or _is_legal_file(path, hit):
+        hit["legal"] = True
+        hit["title"] = ""
+        hit["cwd"] = ""
+        _remember_legal(hit)
+        raise PageError("LEGAL_OMITTED", hit["id"])
     return hit
 
 
@@ -4907,21 +5131,13 @@ def dispatch(action: str, body: dict | None = None, homes: dict | None = None) -
         if not rec_id:
             raise PageError("NOT_FOUND", "id is required")
         target_harness = str(body.get("target") or body.get("harness") or "grok")
+        _refuse_remote_copy(body.get("out"))
         dest = Path(body["out"]) if body.get("out") else (var_dir() / "exports")
-        exp = export_md(rec_id, dest, homes=homes if homes is not None else _homes_for(body))
-        hit = _by_id(homes if homes is not None else _homes_for(body), rec_id)
-        out_path = exp.get("gate", {}).get("out") if isinstance(exp.get("gate"), dict) else exp.get("out")
-        entry = {
-            "parent": rec_id,
-            "parent_harness": hit.get("harness") if isinstance(hit, dict) else "",
-            "target": target_harness,
-            "export": str(out_path or ""),
-            "cwd": hit.get("cwd") if isinstance(hit, dict) else "",
-        }
-        handoff_rec = record_handoff(entry)
-        exp["handoff"] = handoff_rec.get("record")
-        exp["verb"] = "handoff"
-        return exp
+        return handoff(
+            rec_id, target_harness,
+            homes=homes if homes is not None else _homes_for(body),
+            out_dir=dest,
+        )
     if action == "scan":
         store = body.get("store") or body.get("path")
         if not store:
@@ -4979,8 +5195,12 @@ def dispatch(action: str, body: dict | None = None, homes: dict | None = None) -
         rec_id = str(body.get("id") or "")
         if not rec_id:
             raise PageError("NOT_FOUND", "id is required")
+        launch_val = body.get("launch", False)
+        flag = False if launch_val is None else launch_val
+        if not isinstance(flag, bool):
+            raise PageError("BAD_INPUT", "launch must be boolean")
         return resume(rec_id, homes=homes if homes is not None else _homes_for(body),
-                      launch=bool(body.get("launch")))
+                      launch=(flag is True))
     if action == "diff":
         if not body.get("left") or not body.get("right"):
             raise PageError("NOT_FOUND", "diff needs left and right")

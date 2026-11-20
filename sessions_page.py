@@ -23,9 +23,12 @@ import argparse
 import importlib
 import json
 import os
+import re
+import secrets
 import sys
 import threading
 import time
+import types
 import urllib.error
 import urllib.request
 import webbrowser
@@ -37,6 +40,25 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import engine
+
+# Load the error map without executing csm_core/__init__.py. That init pulls
+# scale_indexer, cluster_topology, replay_engine, and dual_lock_proxy, which
+# stay off this page and off engine.dispatch.
+if "csm_core" not in sys.modules:
+    _csm_pkg = types.ModuleType("csm_core")
+    _csm_pkg.__path__ = [str(HERE / "csm_core")]
+    _csm_pkg.__package__ = "csm_core"
+    sys.modules["csm_core"] = _csm_pkg
+from csm_core.error_handlers import to_http
+from csm_core.errors import (
+    ApiError,
+    BadJsonError,
+    BadVerbError,
+    HarnessMissingError,
+    LegalOmittedError,
+    NotFoundError,
+    NotResumableError,
+)
 
 # Desk, the full-screen page, the classic page, and the deck plug already
 # name these. Each one is an engine verb. /api/run and the matching CLI
@@ -109,6 +131,144 @@ def _account_status() -> dict:
 # Kept so the three optional imports stay live. None means that module is absent.
 _OPTIONAL = (_CSM_ERRORS, _CSM_PERSIST, _CSM_TOKENCTR)
 
+_PAGE_API: dict[str, type[ApiError]] = {
+    "BAD_ACTION": BadVerbError,
+    "BAD_INPUT": BadJsonError,
+    "BAD_REQUEST": BadJsonError,
+    "NOT_FOUND": NotFoundError,
+    "NO_STORE": NotFoundError,
+    "LEGAL_OMITTED": LegalOmittedError,
+    "BINARY_ABSENT": HarnessMissingError,
+    "NOT_RESUMABLE": NotResumableError,
+}
+
+
+def _public_ok(text: str) -> bool:
+    """A short sentence with no path and no traceback."""
+    if not isinstance(text, str) or not text or len(text) > 200:
+        return False
+    if any(mark in text for mark in ("\n", "\r", "\\", "/Users/", "/home/")):
+        return False
+    if ":\\" in text or ":/" in text:
+        return False
+    return True
+
+
+def _mutate_budget() -> tuple[int, float]:
+    raw = (os.environ.get("CMSESSIONS_MUTATE_RATE") or "").strip()
+    if not raw:
+        return 20, 10.0
+    try:
+        if "/" in raw:
+            left, right = raw.split("/", 1)
+            limit, window = int(left), float(right)
+        else:
+            limit, window = int(raw), 10.0
+    except ValueError:
+        return 20, 10.0
+    if limit < 1 or window <= 0:
+        return 20, 10.0
+    return limit, window
+
+
+def _action_of(body: dict) -> str:
+    return str(body.get("action") or body.get("verb") or "").strip()
+
+
+def _token_mutation(path: str, body: dict | None) -> bool:
+    """Browser-facing writes. A missing token is refused when Origin is set."""
+    if path == "/api/shutdown":
+        return True
+    if path != "/api/run" or not isinstance(body, dict):
+        return False
+    action = _action_of(body)
+    if action in ("handoff", "strip", "open_folder"):
+        return True
+    if action == "resume" and body.get("launch") is True:
+        return True
+    if action in ("recover", "crash-recover") and body.get("apply") is True:
+        return True
+    return False
+
+
+def _rate_mutation(path: str, body: dict | None) -> bool:
+    if path == "/api/shutdown":
+        return True
+    if not isinstance(body, dict):
+        return False
+    action = _action_of(body)
+    if action in ("handoff", "strip", "export", "import", "convert", "open_folder"):
+        return True
+    if action == "resume" and body.get("launch") is True:
+        return True
+    if action in ("recover", "crash-recover") and body.get("apply") is True:
+        return True
+    return False
+
+
+def _page_error_body(exc: BaseException) -> tuple[int, dict]:
+    """PageError as HTTP. detail is the public sentence, never str(exc)."""
+    kind = str(getattr(exc, "kind", "") or "BAD_REQUEST")
+    cls = _PAGE_API.get(kind)
+    if cls is None:
+        code = kind if re.fullmatch(r"[A-Z][A-Z0-9_]{0,31}", kind) else "BAD_REQUEST"
+        return 400, {
+            "error": kind,
+            "code": code,
+            "message": "Request failed.",
+            "detail": "Request failed.",
+        }
+    api = cls()
+    mapped = to_http(api)
+    status = int(mapped.get("status") or 400)
+    raw = mapped.get("body") if isinstance(mapped.get("body"), dict) else {}
+    code = raw.get("code") if isinstance(raw.get("code"), str) else ""
+    message = raw.get("message") if isinstance(raw.get("message"), str) else ""
+    if status >= 500 or code == "internal":
+        pub = api.public() if isinstance(api, ApiError) else {}
+        code = str(pub.get("code") or "BAD_REQUEST")
+        message = str(pub.get("message") or "Request failed.")
+        status = 404 if isinstance(api, NotFoundError) else 400
+    if not _public_ok(message):
+        message = "Request failed."
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,40}", code or ""):
+        code = "BAD_REQUEST"
+    return status, {
+        "error": kind,
+        "code": code,
+        "message": message,
+        "detail": message,
+    }
+
+
+def _internal_body(exc: BaseException) -> tuple[int, dict]:
+    mapped = to_http(exc)
+    status = int(mapped.get("status") or 500)
+    raw = mapped.get("body") if isinstance(mapped.get("body"), dict) else {}
+    code = raw.get("code") if isinstance(raw.get("code"), str) else "internal"
+    message = raw.get("message") if isinstance(raw.get("message"), str) else "Something went wrong."
+    if not _public_ok(message):
+        message = "Something went wrong."
+    if code != "internal" and not _public_ok(code):
+        code = "internal"
+    return status, {
+        "error": "INTERNAL",
+        "code": code,
+        "message": message,
+        "detail": message,
+    }
+
+
+def _inject_token(data: bytes, nonce: str) -> bytes:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data
+    if "</head>" not in text or 'name="cm-token"' in text:
+        return data
+    tag = f'<meta name="cm-token" content="{nonce}">'
+    return text.replace("</head>", tag + "</head>", 1).encode("utf-8")
+
 
 def _ui_dir() -> Path:
     frozen = getattr(sys, "_MEIPASS", None)
@@ -174,6 +334,23 @@ def _alert(text: str) -> None:
 
 def _serve(port: int, open_browser: bool = False) -> int:
     ui = _ui_dir()
+    boot_nonce = secrets.token_hex(24)
+    rate_lock = threading.Lock()
+    rate_hits: dict[str, list[float]] = {}
+
+    def _check_rate(bucket: str, limit: int, window_s: float) -> bool:
+        now = time.monotonic()
+        with rate_lock:
+            hits = rate_hits.setdefault(bucket, [])
+            cutoff = now - window_s
+            if hits and hits[0] <= cutoff:
+                hits = [stamp for stamp in hits if stamp > cutoff]
+                rate_hits[bucket] = hits
+            if len(hits) >= limit:
+                return False
+            hits.append(now)
+            return True
+
     allow = {
         "/": ui / "index.html",
         "/index.html": ui / "index.html",
@@ -203,7 +380,7 @@ def _serve(port: int, open_browser: bool = False) -> int:
                 self.send_header("Access-Control-Allow-Origin", origin)
                 self.send_header("Vary", "Origin")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-CM-Token")
 
         def setup(self) -> None:
             super().setup()
@@ -232,7 +409,11 @@ def _serve(port: int, open_browser: bool = False) -> int:
             try:
                 self._get()
             except Exception as exc:  # noqa: BLE001
-                self._json(500, {"error": "INTERNAL", "detail": type(exc).__name__})
+                status, payload = _internal_body(exc)
+                try:
+                    self._json(status, payload)
+                except Exception:
+                    return
 
         def _get(self) -> None:
             path = self.path.split("?", 1)[0]
@@ -257,11 +438,69 @@ def _serve(port: int, open_browser: bool = False) -> int:
                 kind = "image/png"
             else:
                 kind = "text/html; charset=utf-8"
-            self._send(200, file.read_bytes(), kind)
+            data = file.read_bytes()
+            if kind.startswith("text/html"):
+                data = _inject_token(data, boot_nonce)
+            self._send(200, data, kind)
+
+        def _token_matches(self) -> bool:
+            tok = self.headers.get("X-CM-Token")
+            if not isinstance(tok, str) or len(tok) != len(boot_nonce):
+                return False
+            return secrets.compare_digest(tok, boot_nonce)
+
+        def _mutation_allowed(self) -> bool:
+            tok = self.headers.get("X-CM-Token")
+            matched = self._token_matches()
+            if tok is not None and not matched:
+                return False
+            if (self.headers.get("Origin") or self.headers.get("Referer")) and not matched:
+                return False
+            if os.environ.get("CMSESSIONS_REQUIRE_TOKEN") == "1" and not matched:
+                return False
+            return True
+
+        def _allow_rate(self, mutating: bool) -> bool:
+            host = str(self.client_address[0]) if self.client_address else "local"
+            if mutating:
+                limit, window = _mutate_budget()
+                return _check_rate(f"mutate:{host}", limit, window)
+            return _check_rate(f"read:{host}", 240, 60.0)
+
+        def _forbidden(self) -> None:
+            self._json(403, {
+                "error": "FORBIDDEN",
+                "code": "FORBIDDEN",
+                "message": "Invalid or missing session token.",
+            })
+
+        def _too_many(self) -> None:
+            self._json(429, {
+                "error": "RATE_LIMIT",
+                "code": "RATE_LIMIT",
+                "message": "Too many requests.",
+                "detail": "Too many requests.",
+            })
 
         def do_POST(self) -> None:
+            try:
+                self._post()
+            except Exception as exc:  # noqa: BLE001
+                status, payload = _internal_body(exc)
+                try:
+                    self._json(status, payload)
+                except Exception:
+                    return
+
+        def _post(self) -> None:
             path = self.path.split("?", 1)[0]
             if path == "/api/shutdown":
+                if not self._mutation_allowed():
+                    self._forbidden()
+                    return
+                if not self._allow_rate(True):
+                    self._too_many()
+                    return
                 self._json(200, {"kind": "OK"})
                 threading.Thread(target=httpd.shutdown, daemon=True).start()
                 return
@@ -286,6 +525,12 @@ def _serve(port: int, open_browser: bool = False) -> int:
             if not isinstance(body, dict):
                 self._json(400, {"error": "BAD_REQUEST", "detail": "body must be an object"})
                 return
+            if _token_mutation(path, body) and not self._mutation_allowed():
+                self._forbidden()
+                return
+            if not self._allow_rate(_rate_mutation(path, body)):
+                self._too_many()
+                return
             action = str(body.get("action") or body.get("verb") or "").strip()
             if action == "account_status":
                 self._json(200, _account_status())
@@ -293,10 +538,12 @@ def _serve(port: int, open_browser: bool = False) -> int:
             try:
                 rec = _dispatch(action, body)
             except _error_types() as exc:
-                self._json(400, {"error": getattr(exc, "kind", "BAD_ACTION"), "detail": str(exc)})
+                status, payload = _page_error_body(exc)
+                self._json(status, payload)
                 return
             except Exception as exc:  # noqa: BLE001
-                self._json(500, {"error": "INTERNAL", "detail": type(exc).__name__})
+                status, payload = _internal_body(exc)
+                self._json(status, payload)
                 return
             self._json(200, rec)
 
