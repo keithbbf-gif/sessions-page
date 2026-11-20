@@ -128,6 +128,373 @@ def _account_status() -> dict:
     return rec
 
 
+_SOLARO_READY: bool | None = None
+_PANEL_SECRET = frozenset({
+    "apikey", "apisecret", "secret", "password", "passwd", "authorization",
+    "credential", "privatekey", "accesstoken", "refreshtoken", "bearertoken",
+    "clientsecret", "signingkey", "authtoken", "sessionkey", "sessiontoken",
+    "key", "token",
+})
+
+
+def _ensure_solaro_core() -> bool:
+    """Import solaro_core from sys.path or the sibling checkout. Never raises."""
+    global _SOLARO_READY
+    if _SOLARO_READY is not None:
+        return _SOLARO_READY
+    try:
+        importlib.import_module("solaro_core")
+        _SOLARO_READY = True
+        return True
+    except Exception:
+        pass
+    candidates: list[Path] = []
+    try:
+        here = Path(__file__).resolve()
+        if len(here.parents) > 2:
+            candidates.append(here.parents[2] / "solaro_core")
+        if len(here.parents) > 3:
+            candidates.append(here.parents[3] / "solaro_core")
+    except Exception:
+        candidates = []
+    for folder in candidates:
+        try:
+            if not folder.is_dir():
+                continue
+            parent = str(folder.parent)
+            if parent not in sys.path:
+                sys.path.append(parent)
+            importlib.import_module("solaro_core")
+            _SOLARO_READY = True
+            return True
+        except Exception:
+            continue
+    _SOLARO_READY = False
+    return False
+
+
+def _solaro_bundle_bytes(fallback: Path) -> bytes:
+    """Prefer a verified solaro_core bundle, then the copy shipped in ui/."""
+    if _ensure_solaro_core():
+        try:
+            from solaro_core.ui_cache import get_bundle_bytes
+            data = get_bundle_bytes()
+            if isinstance(data, (bytes, bytearray)) and data:
+                return bytes(data)
+        except Exception:
+            pass
+    try:
+        return fallback.read_bytes()
+    except OSError:
+        return b""
+
+
+def _mdata_status(body: dict) -> dict:
+    """Catalog summary. Fail-open and never block process startup."""
+    fail = {"kind": "OK", "status": "unavailable", "axes": {}}
+    refresh = isinstance(body, dict) and body.get("refresh") is True
+    if not _ensure_solaro_core():
+        return fail
+    try:
+        import solaro_core.mdata as mdata
+        rec = mdata.mdata_status(refresh=refresh)
+    except Exception:
+        return fail
+    if not isinstance(rec, dict):
+        return fail
+    out = {"kind": "OK"}
+    out.update(rec)
+    if not isinstance(out.get("axes"), dict):
+        out["axes"] = {}
+    return out
+
+
+def _approved_roots(homes: dict | None = None, place_root: str | None = None) -> list[Path]:
+    """Homes from places(), default_homes(), and an optional test root."""
+    roots: list[Path] = []
+    seen: set[str] = set()
+
+    def add(value: object) -> None:
+        if isinstance(value, Path):
+            text = str(value)
+        elif isinstance(value, str):
+            text = value.strip()
+        else:
+            return
+        if not text:
+            return
+        key = os.path.normcase(os.path.normpath(text))
+        if key in seen:
+            return
+        seen.add(key)
+        roots.append(Path(text))
+
+    source = homes if isinstance(homes, dict) else None
+    if source is None:
+        try:
+            source = engine.default_homes()
+        except Exception:
+            source = {}
+    if isinstance(source, dict):
+        for value in source.values():
+            add(value)
+    try:
+        snapshot = engine.places(homes if isinstance(homes, dict) else None)
+    except Exception:
+        snapshot = {}
+    if isinstance(snapshot, dict):
+        for row in snapshot.get("homes") or []:
+            if isinstance(row, dict):
+                add(row.get("path"))
+                add(row.get("candidate"))
+    add(place_root)
+    return roots
+
+
+def _folder_inside(resolved: Path, root: Path) -> bool:
+    try:
+        return bool(engine._path_inside(resolved, root))
+    except Exception:
+        return False
+
+
+def _open_folder(body: dict) -> dict:
+    """Open one approved directory. The reply carries the folder name only."""
+    raw = body.get("path") if isinstance(body, dict) else None
+    if not isinstance(raw, str) or not raw.strip() or "\x00" in raw:
+        raise engine.PageError("NO_STORE", "folder required")
+    text = raw.strip()
+    probe = Path(text)
+    try:
+        linked = probe.is_symlink()
+    except OSError:
+        raise engine.PageError("NO_STORE", "folder required")
+    if linked:
+        raise engine.PageError("NO_STORE", "folder required")
+    try:
+        resolved = probe.resolve(strict=True)
+    except OSError:
+        raise engine.PageError("NO_STORE", "folder required")
+    try:
+        if Path(text).is_symlink() or not resolved.is_dir():
+            raise engine.PageError("NO_STORE", "folder required")
+    except engine.PageError:
+        raise
+    except OSError:
+        raise engine.PageError("NO_STORE", "folder required")
+    try:
+        blocked = bool(engine._blocked_tree(resolved) or engine._blocked_tree(text))
+    except Exception:
+        blocked = True
+    if blocked:
+        raise engine.PageError("BAD_INPUT", "folder outside approved roots")
+    homes = None
+    place_root = None
+    if os.environ.get("CMSESSIONS_TEST_MODE") == "1":
+        if isinstance(body.get("homes"), dict):
+            homes = body.get("homes")
+        extra = body.get("place_root")
+        if isinstance(extra, str) and extra.strip():
+            place_root = extra.strip()
+    if not any(_folder_inside(resolved, root) for root in _approved_roots(homes, place_root)):
+        raise engine.PageError("BAD_INPUT", "folder outside approved roots")
+    if body.get("dry") is not True and os.environ.get("CMSESSIONS_TEST_MODE") != "1":
+        if os.name == "nt":
+            try:
+                os.startfile(str(resolved))
+            except OSError:
+                raise engine.PageError("NO_STORE", "folder required")
+    name = resolved.name or "folder"
+    if len(name) > 80 or any(mark in name for mark in ("\\", "/", ":", "\n", "\r")):
+        name = "folder"
+    return {"kind": "OK", "opened": (not bool(body.get("dry"))), "path": name}
+
+
+def _panel_clean(value: object, depth: int = 0) -> object:
+    """Drop secret-shaped keys and values before a panel reply."""
+    if depth > 6:
+        return None
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float):
+        if value != value or value in (float("inf"), float("-inf")):
+            return None
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if len(text) >= 12 and (
+            text[:7].lower() == "bearer "
+            or text.startswith(("sk-", "ck_", "xai-", "AIza", "AQ."))
+        ):
+            return None
+        return value[:512]
+    if isinstance(value, list):
+        return [_panel_clean(item, depth + 1) for item in value[:32]]
+    if isinstance(value, dict):
+        cleaned: dict[str, object] = {}
+        for key, item in list(value.items())[:64]:
+            if not isinstance(key, str):
+                continue
+            norm = "".join(ch for ch in key.lower() if ch.isalnum())
+            if not norm or norm in _PANEL_SECRET:
+                continue
+            if any(part in norm for part in ("apikey", "secret", "password", "authorization")):
+                continue
+            child = _panel_clean(item, depth + 1)
+            if child is None and isinstance(item, str):
+                continue
+            cleaned[key] = child
+        return cleaned
+    return None
+
+
+def _tokenctr_fetch(suffix: str) -> dict:
+    """Allowlisted Token Center GET. solaro_core first, then the local bridge."""
+    _ensure_solaro_core()
+    try:
+        import solaro_core.tokenctr as tokenctr
+        rec = tokenctr.fetch_endpoint(suffix)
+        if isinstance(rec, dict):
+            return rec
+    except Exception:
+        pass
+    mod = _soft_import("csm_core.tokenctr_bridge")
+    fn = getattr(mod, "fetch_endpoint", None) if mod is not None else None
+    if callable(fn):
+        try:
+            rec = fn(suffix)
+        except Exception:
+            rec = None
+        if isinstance(rec, dict):
+            return rec
+    return {"status": "unavailable", "reason": "not_configured"}
+
+
+def _panel_account() -> dict:
+    acct = dict(_account_status())
+    if _ensure_solaro_core():
+        try:
+            import solaro_core.account as account
+            profile = account.public_profile()
+        except Exception:
+            profile = None
+        if isinstance(profile, dict):
+            cleaned = _panel_clean(profile)
+            if isinstance(cleaned, dict):
+                for key, value in cleaned.items():
+                    if key in acct and key in ("status", "reason", "account_label", "used", "limit"):
+                        continue
+                    acct[key] = value
+    cleaned_acct = _panel_clean(acct)
+    if isinstance(cleaned_acct, dict):
+        return cleaned_acct
+    return {"status": "unavailable", "reason": "not_configured"}
+
+
+def _panel_usage() -> dict:
+    live = _tokenctr_fetch("/v1/usage")
+    dead = {"not_configured", "not_local", "auth_required", "unreachable", "timeout", "http_error"}
+    if (
+        isinstance(live, dict)
+        and live.get("status") != "unavailable"
+        and live.get("reason") not in dead
+    ):
+        cleaned = _panel_clean(live)
+        if isinstance(cleaned, dict):
+            cleaned["_status"] = 200
+            return cleaned
+    gauge: dict = {}
+    mod = _soft_import("csm_core.tokenctr_bridge")
+    fn = getattr(mod, "usage_gauge", None) if mod is not None else None
+    if callable(fn):
+        try:
+            rec = fn()
+        except Exception:
+            rec = None
+        if isinstance(rec, dict):
+            gauge = rec
+    rollup = gauge.get("rollup") if isinstance(gauge.get("rollup"), list) else []
+    return {
+        "_status": 200,
+        "status": gauge.get("status") if isinstance(gauge.get("status"), str) else "unavailable",
+        "used": gauge.get("used"),
+        "limit": gauge.get("limit"),
+        "free_used_face_usd": gauge.get("free_used_face_usd"),
+        "free_quota_face_usd": gauge.get("free_quota_face_usd"),
+        "credits_face_usd": gauge.get("credits_face_usd"),
+        "usd": gauge.get("usd"),
+        "tokens_in": gauge.get("tokens_in"),
+        "tokens_out": gauge.get("tokens_out"),
+        "rollup": rollup,
+    }
+
+
+def _save_autotopup(payload: dict) -> None:
+    """Persist a non-secret auto-top-up preference. Keys are never written."""
+    if not isinstance(payload, dict):
+        return
+    auto = payload.get("autotopup")
+    if not isinstance(auto, dict):
+        return
+    enabled = auto.get("enabled")
+    cap = auto.get("cap_usd")
+    if not isinstance(enabled, bool):
+        return
+    if isinstance(cap, bool) or not isinstance(cap, (int, float)):
+        return
+    if not _ensure_solaro_core():
+        return
+    try:
+        import solaro_core.account as account
+        current = account.load_account()
+        if not isinstance(current, dict):
+            return
+        settings = current.get("settings") if isinstance(current.get("settings"), dict) else {}
+        current = dict(current)
+        current["settings"] = dict(settings)
+        current["settings"]["autotopup"] = {"enabled": enabled, "cap_usd": float(cap)}
+        for secret_name in ("key", "api_key", "token", "secret", "password", "authorization"):
+            current.pop(secret_name, None)
+        account.save_account(current)
+    except Exception:
+        return
+
+
+def _handle_solaro_panel(body: dict) -> dict:
+    """<solaro-account mode=local> bridge. JSON only, never a 500, never a key."""
+    try:
+        path = body.get("path") if isinstance(body, dict) else ""
+        method = str((body.get("method") if isinstance(body, dict) else "") or "GET").upper()
+        payload = body.get("body") if isinstance(body, dict) and isinstance(body.get("body"), dict) else {}
+        if not isinstance(path, str) or not path.startswith("/v1/"):
+            return {"_status": 200, "kind": "OK", "local_only": True}
+        if method == "GET" and path == "/v1/account":
+            return {"_status": 200, "status": _panel_account()}
+        if method == "GET" and path in ("/v1/usage", "/v1/usage/today"):
+            return _panel_usage()
+        if method == "GET" and path == "/v1/logs":
+            live = _tokenctr_fetch("/v1/logs")
+            rows = live.get("data") if isinstance(live, dict) else None
+            if isinstance(live, dict) and live.get("status") != "unavailable" and isinstance(rows, list):
+                cleaned = _panel_clean(rows)
+                return {"_status": 200, "data": cleaned if isinstance(cleaned, list) else []}
+            return {"_status": 200, "data": []}
+        if method == "GET" and path == "/v1/statement":
+            live = _tokenctr_fetch("/v1/statement")
+            if isinstance(live, dict) and live.get("status") != "unavailable":
+                cleaned = _panel_clean(live)
+                if isinstance(cleaned, dict):
+                    cleaned["_status"] = 200
+                    return cleaned
+            return {"_status": 200}
+        if method == "POST" and path in ("/v1/account", "/v1/account/create"):
+            _save_autotopup(payload)
+            return {"_status": 200, "kind": "OK", "local_only": True}
+        return {"_status": 200, "kind": "OK", "local_only": True}
+    except Exception:
+        return {"_status": 200, "kind": "OK", "local_only": True}
+
+
 # Kept so the three optional imports stay live. None means that module is absent.
 _OPTIONAL = (_CSM_ERRORS, _CSM_PERSIST, _CSM_TOKENCTR)
 
@@ -264,7 +631,7 @@ def _inject_token(data: bytes, nonce: str) -> bytes:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         return data
-    if "</head>" not in text or 'name="cm-token"' in text:
+    if "</head>" not in text or '<meta name="cm-token"' in text:
         return data
     tag = f'<meta name="cm-token" content="{nonce}">'
     return text.replace("</head>", tag + "</head>", 1).encode("utf-8")
@@ -366,6 +733,9 @@ def _serve(port: int, open_browser: bool = False) -> int:
         "/settings.html": ui / "settings.html",
         "/settings.js": ui / "settings.js",
         "/settings.css": ui / "settings.css",
+        "/solaro-account.js": ui / "solaro-account.js",
+        "/tokens.json": ui / "tokens.json",
+        "/manifest.json": ui / "manifest.json",
     }
 
     class Handler(BaseHTTPRequestHandler):
@@ -434,11 +804,16 @@ def _serve(port: int, open_browser: bool = False) -> int:
                 kind = "text/css"
             elif file.suffix == ".js":
                 kind = "text/javascript"
+            elif file.suffix == ".json":
+                kind = "application/json; charset=utf-8"
             elif file.suffix == ".png":
                 kind = "image/png"
             else:
                 kind = "text/html; charset=utf-8"
-            data = file.read_bytes()
+            if path == "/solaro-account.js":
+                data = _solaro_bundle_bytes(file)
+            else:
+                data = file.read_bytes()
             if kind.startswith("text/html"):
                 data = _inject_token(data, boot_nonce)
             self._send(200, data, kind)
@@ -492,7 +867,29 @@ def _serve(port: int, open_browser: bool = False) -> int:
                 except Exception:
                     return
 
+        def _read_body(self) -> bytes | None:
+            """Consume Content-Length before any reply.
+
+            HTTP/1.1 keeps the socket. An unread body is parsed as the next
+            request line, which showed up as method ``{}GET``.
+            """
+            try:
+                length = int(self.headers.get("Content-Length") or "0")
+            except ValueError:
+                return None
+            if length < 0 or length > 1_000_000:
+                return None
+            if length == 0:
+                return b""
+            return self.rfile.read(length)
+
         def _post(self) -> None:
+            raw = self._read_body()
+            if raw is None:
+                self._send(400, json.dumps({
+                    "error": "BAD_REQUEST", "detail": "body length",
+                }).encode("utf-8"), "application/json; charset=utf-8", close=True)
+                return
             path = self.path.split("?", 1)[0]
             if path == "/api/shutdown":
                 if not self._mutation_allowed():
@@ -507,16 +904,6 @@ def _serve(port: int, open_browser: bool = False) -> int:
             if path != "/api/run":
                 self._json(404, {"kind": "NOT_FOUND", "path": path})
                 return
-            try:
-                length = int(self.headers.get("Content-Length") or "0")
-            except ValueError:
-                length = -1
-            if length < 0 or length > 1_000_000:
-                self._send(400, json.dumps({
-                    "error": "BAD_REQUEST", "detail": "body length",
-                }).encode("utf-8"), "application/json; charset=utf-8", close=True)
-                return
-            raw = self.rfile.read(length) if length else b"{}"
             try:
                 body = json.loads(raw.decode("utf-8") or "{}")
             except ValueError as exc:
@@ -534,6 +921,26 @@ def _serve(port: int, open_browser: bool = False) -> int:
             action = str(body.get("action") or body.get("verb") or "").strip()
             if action == "account_status":
                 self._json(200, _account_status())
+                return
+            if action == "mdata_status":
+                self._json(200, _mdata_status(body))
+                return
+            if action == "open_folder":
+                try:
+                    rec = _open_folder(body)
+                except _error_types() as exc:
+                    status, payload = _page_error_body(exc)
+                    self._json(status, payload)
+                    return
+                except Exception as exc:  # noqa: BLE001
+                    status, payload = _internal_body(exc)
+                    self._json(status, payload)
+                    return
+                self._json(200, rec)
+                return
+            panel_path = body.get("path")
+            if not action and isinstance(panel_path, str) and panel_path.startswith("/v1/"):
+                self._json(200, _handle_solaro_panel(body))
                 return
             try:
                 rec = _dispatch(action, body)

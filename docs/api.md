@@ -1,10 +1,45 @@
 # API
 
-`sessions_page._serve` binds `127.0.0.1` and handles these routes on the nested `Handler` ([sessions_page.py](../sessions_page.py) `sessions_page._serve`). `Handler._get` serves the three GETs. `Handler.do_POST` serves `POST /api/run` by calling `engine.dispatch`. The path is the request path with any query string removed. `Handler._cors` echoes `Origin` only when it starts with `http://127.0.0.1` or `http://localhost`.
+`sessions_page._serve` binds `127.0.0.1` and handles these routes on the nested `Handler` ([sessions_page.py](../sessions_page.py) `sessions_page._serve`). `Handler._get` serves the GETs below and the pages in its allow map. `Handler.do_POST` serves `POST /api/run`. It does not send every body to `engine.dispatch`. `account_status`, `mdata_status`, `open_folder`, and a `<solaro-account>` local-bridge body for `/v1/*` are handled on the page. Engine verbs still call `engine.dispatch`. The path is the request path with any query string removed. `Handler._cors` echoes `Origin` only when it starts with `http://127.0.0.1` or `http://localhost`, and it allows the header `X-CM-Token`.
 
-These are not the Cosmos `/api/v1/session_tools` routes. The HTTP handler does not pass a `homes` argument, so `engine.dispatch` keeps `homes=None`.
+These are not the Cosmos `/api/v1/session_tools` routes. The HTTP handler does not pass a `homes` argument, so `engine.dispatch` keeps `homes=None` when it runs.
 
-A failure inside `Handler._get` is 500 `{"error": "INTERNAL", "detail": <exception class name>}`.
+A failure inside `Handler._get` or `Handler.do_POST` goes through `csm_core.error_handlers.to_http`. The body carries a public `code` and `message`. It does not include the exception class name, a traceback, or a path. An unknown exception is 500 `{"error": "INTERNAL", "code": "internal", "message": "Something went wrong.", "detail": "Something went wrong."}`.
+
+## Pages
+
+`Handler._get` serves these from `ui/` ([sessions_page.py](../sessions_page.py) `sessions_page._serve`):
+
+- `/` and `/index.html` — `ui/index.html`
+- `/index_classic.html`, `/app.js`, `/app.css`
+- `/accounts.html`, `/accounts.js`, `/accounts.css`
+- `/settings.html`, `/settings.js`, `/settings.css`
+- the three `cmsessions_*.png` screenshots
+
+`ui/solaro-account.js` is the shared `<solaro-account>` script (`/solaro-account.js` when the page loads it). `ui/tokens.json` and `ui/manifest.json` sit beside it. The PyInstaller datas list bundles every file in `ui/` except `*.bak`, including those three ([sessions_page.spec](../sessions_page.spec)).
+
+HTML responses get a per-boot `<meta name="cm-token" content="...">` before `</head>` (`sessions_page._inject_token`). The value is `secrets.token_hex(24)` for that process.
+
+`/accounts.html` mounts that element through `solaro_core`. The seven tabs are account, usage, logs, billing, settings, keys, and models. In `mode="local"` the element POSTs to its `endpoint` (default `/api/run`) and sends `X-CM-Token` when the meta tag is present. The JSON body is `{path, method, body}`. `path` is a `/v1/*` Token Center path such as `/v1/account`, `/v1/usage/today`, `/v1/logs`, or `/v1/statement`. Those local-bridge posts are handled on the page. They do not call `engine.dispatch`. Web mode talks to `https://api.tokenctr.com/v1` in the browser and is not this handler.
+
+## Direct actions on POST /api/run
+
+These return before `engine.dispatch`:
+
+- `account_status` — `sessions_page._account_status`. It calls `csm_core.tokenctr_bridge.account_status` when that function exists. A missing bridge, a raised error, or a non-dict result is `{"status": "unavailable", "reason": "not_configured"}`. `CMSESSIONS_TOKENCTR_URL` is the Token Center base. `csm_core.tokenctr_bridge` opens a socket only for an http(s) loopback URL. `solaro_core.tokenctr` reads `CMSESSIONS_TOKENCTR_URL` or `SOLARO_TOKENCTR_URL`, and when both are unset `SOLARO_TOKENCTR_LIVE=1` or `CMSESSIONS_TOKENCTR_LIVE=1` selects the live origin `https://api.tokenctr.com`. `TOKENCTR_API_KEY` is sent as a Bearer token only to that host. It is not written to disk and not returned. Unset URL and no live flag opens no socket.
+- `mdata_status` — read-only catalog summary from `solaro_core.mdata.mdata_status`. The public cache is `https://mdata.modelraters.com` (`/v1/models.json` and `/v1/leaderboard.json`), with a disk cache. The result is advisory. It does not launch a harness.
+- `open_folder` — opens a local folder. It does not call `engine.dispatch`. A browser POST is mutating: it needs `X-CM-Token` and it counts toward the mutation rate limit.
+- `<solaro-account>` `/v1/*` — the local bridge above. A body whose `path` is under `/v1/` is not an engine verb.
+
+Cross-harness `handoff` does not call `mdata.modelraters.com` to launch. `mdata_status` is read-only and advisory only.
+
+## Token and rate limit
+
+Mutating browser POSTs send `X-CM-Token` equal to the per-boot meta value (`Handler._mutation_allowed`, `sessions_page._token_mutation`). That list is `POST /api/shutdown` and, on `POST /api/run`, `handoff`, `strip`, `open_folder`, `resume` when `launch` is true, and `recover` or `crash-recover` when `apply` is true. A token header that does not match is 403 `{"error": "FORBIDDEN", "code": "FORBIDDEN", "message": "Invalid or missing session token."}`. The same 403 is used when `Origin` or `Referer` is set and the token does not match, and when `CMSESSIONS_REQUIRE_TOKEN` is `1` and the token does not match.
+
+`Handler._allow_rate` limits posts from each client address. Mutating actions (`sessions_page._rate_mutation`, and shutdown) use `CMSESSIONS_MUTATE_RATE` when it is `N` or `N/seconds`, otherwise 20 per 10 seconds (`sessions_page._mutate_budget`). Other `POST /api/run` bodies use 240 per 60 seconds. Over the limit is 429 `{"error": "RATE_LIMIT", "code": "RATE_LIMIT", "message": "Too many requests.", "detail": "Too many requests."}`.
+
+`engine.PageError` on an engine verb is mapped through `csm_core.error_handlers.to_http` (`sessions_page._page_error_body`). The JSON has `error` (the page kind), `code`, `message`, and `detail`. `message` and `detail` are the public sentence, not `str(exc)`. Any other exception uses the same sanitizer (`sessions_page._internal_body`).
 
 ## GET /api/verbs
 
@@ -59,7 +94,7 @@ Each home is a `engine.home_status` row plus:
 
 ## POST /api/run
 
-`Handler.do_POST` reads a JSON object and calls `engine.dispatch(str(body.get("action") or ""), body)`.
+`Handler.do_POST` reads a JSON object. `account_status`, `mdata_status`, `open_folder`, and a `<solaro-account>` `/v1/*` local-bridge body are answered on the page and do not call `engine.dispatch`. Any other action calls `engine.dispatch(str(body.get("action") or ""), body)`.
 
 Body rules in `Handler.do_POST`:
 
@@ -70,7 +105,7 @@ Body rules in `Handler.do_POST`:
 
 `engine.dispatch` uses the action string it was given. When that string is empty it reads `body["action"]`, then `body["verb"]`.
 
-Success is 200 and the dict `engine.dispatch` returned. `engine.PageError` is 400 `{"error": <kind>, "detail": <message>}`. Any other exception is 500 `{"error": "INTERNAL", "detail": <exception class name>}`.
+Success is 200 and the dict the direct action or `engine.dispatch` returned. `engine.PageError` is mapped through `csm_core.error_handlers.to_http` to `{"error": <kind>, "code": <public code>, "message": <public sentence>, "detail": <same sentence>}`. The status is the mapped status (404 for not-found, otherwise 400 for a known page error). Any other exception is 500 `{"error": "INTERNAL", "code": "internal", "message": "Something went wrong.", "detail": "Something went wrong."}`. The exception class name is not copied.
 
 An action that is not one of the verbs below, including an empty action, raises `PageError("BAD_ACTION", …)` from `engine.dispatch`.
 
@@ -96,9 +131,9 @@ These are not in `engine.VERBS`. `engine.dispatch` still handles them.
 
 `preview` calls `engine.preview`. Body: `id` is required, or `PageError("NOT_FOUND", "id is required")`. `turns` defaults to 6 and must be an integer from 1 to 100 (`engine._bounded_int`). `chars` defaults to 400 and must be an integer from 10 to 5000. `store` selects the home. Kind is `OK` or `TRUNCATED`. The gate, from `engine._preview_result`, is `id`, `n_turns`, `shown`, and `turns`. Each shown turn is `seq`, `role`, and `text`. `engine.preview` reads through `engine._preview_openwork`, `engine._preview_hermes`, `engine._preview_antigravity`, `engine._preview_cowork`, or a short jsonl or json read. A cursor `store.db`, or any other unread path, raises `PageError("UNMEASURED", …)`.
 
-`find` calls `engine.find` ([engine.py](../engine.py) `engine.find`, `engine.dispatch`). Body: `query` or `q`, `harness` or `family`, `cwd`, `limit`, `drive`, and `fresh`. `limit` defaults to `engine.DEFAULT_LIMIT` (200) and must be an integer from 1 to 2000. `fresh` must be a boolean when present; the default is false. A non-boolean `fresh` is `PageError("BAD_INPUT", "fresh must be boolean")`. Homes are `engine.default_homes` only. Kind is `OK`. The gate is `n`, `n_shown`, `n_legal`, and `families`. Extra keys are `hits` (the shown rows) and `n`. `legal_omitted` is the legal count. Each hit, from `engine._hit`, has `id`, `harness`, `vendor_id`, `path`, `cwd`, `title`, `stream`, `legal`, `updated`, `bytes`, and `aliases`. `engine._enrich` may fill `title` and `cwd` on the shown rows, and may then mark a row legal and blank those two fields. A legal hit keeps `title` and `cwd` empty. Each family row is `family`, `status`, `path`, `n`, and `n_legal`. `status` is `OK` when that store is listed, `ABSENT` when it is not, or, when `engine._walk_report` skipped a bad store, that store's `PageError` kind or `UNREADABLE`. Absent and failed families have `n` null.
+`find` calls `engine.find` ([engine.py](../engine.py) `engine.find`, `engine.dispatch`). Body: `query` or `q`, `harness` or `family`, `cwd`, `limit`, `drive`, and `fresh`. `limit` defaults to `engine.DEFAULT_LIMIT` (200) and must be an integer from 1 to 2000. `fresh` must be a boolean when present; the default is false. A non-boolean `fresh` is `PageError("BAD_INPUT", "fresh must be boolean")`. `fresh` is a compatibility flag. It does not change cache or walk behavior. `engine._live_load` always walks (`del fresh`). Homes are `engine.default_homes` only. Kind is `OK`. The gate is `n`, `n_shown`, `n_legal`, and `families`. Extra keys are `hits` (the shown rows) and `n`. `legal_omitted` is the legal count. Each hit, from `engine._hit`, has `id`, `harness`, `vendor_id`, `path`, `cwd`, `title`, `stream`, `legal`, `updated`, `bytes`, and `aliases`. `engine._enrich` may fill `title` and `cwd` on the shown rows, and may then mark a row legal and blank those two fields. A legal hit keeps `title` and `cwd` empty. Each family row is `family`, `status`, `path`, `n`, and `n_legal`. `status` is `OK` when that store is listed, `ABSENT` when it is not, or, when `engine._walk_report` skipped a bad store, that store's `PageError` kind or `UNREADABLE`. Absent and failed families have `n` null.
 
-`handoff` requires `id`, or `PageError("NOT_FOUND", "id is required")`. `target` or `harness` is the target harness; the default is `grok`. `out` is the export directory. `store` selects the home. `engine.dispatch` calls `engine.export_md`, then `engine._by_id`, then `engine.record_handoff`. The return value is the export record with `verb` set to `handoff` and `handoff` set to the appended record. `engine.record_handoff` appends one line to `handoffs.jsonl` under `engine.var_dir`. That record has `schema` `cmsessions-handoff/1`, `ts`, `parent`, `parent_harness`, `target`, `binary`, `pid`, `export`, and `cwd`. The child id is not known, so `binary` and `pid` stay empty on this path. The source session is not modified.
+`handoff` requires `id`, or `PageError("NOT_FOUND", "id is required")`. `target` or `harness` is the target harness; the default is `grok`. `out` is the export directory. `store` selects the home. `engine.dispatch` calls `engine.export_md`, then `engine._by_id`, then `engine.record_handoff`. The return value is the export record with `verb` set to `handoff` and `handoff` set to the appended record. `engine.record_handoff` appends one line to `handoffs.jsonl` under `engine.var_dir`. That record has `schema` `cmsessions-handoff/1`, `ts`, `parent`, `parent_harness`, `target`, `binary`, `pid`, `export`, and `cwd`. The child id is not known, so `binary` and `pid` stay empty on this path. The source session is not modified. Cross-harness `handoff` does not call `mdata.modelraters.com` to launch. `mdata_status` is read-only and advisory only.
 
 `scan` requires `store` or `path`, or `PageError("NO_STORE", "scan needs a store")`. It calls `engine.scan`, which calls `engine._store_homes` and then `engine.find` with `limit` 20. If the store matches no harness, kind is `UNMEASURED` and the gate is `n` null, `path`, and `families` empty. Otherwise kind is `OK` and the gate is `n`, `families` (the find family rows), and `sample_ids` (up to five hit ids). `legal_omitted` and extra `n` come from that find.
 

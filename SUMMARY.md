@@ -75,4 +75,4 @@ Network and remote sessions are out of scope until local launch matches the wind
 
 [README.md](README.md), [docs/BRIEF.md](docs/BRIEF.md), [docs/api.md](docs/api.md), [docs/integration.md](docs/integration.md), [docs/testing.md](docs/testing.md), [docs/consumer/README.md](docs/consumer/README.md), [docs/consumer/install.md](docs/consumer/install.md), [docs/consumer/safety.md](docs/consumer/safety.md), [docs/consumer/cosmos.md](docs/consumer/cosmos.md), [docs/consumer/find-and-name.md](docs/consumer/find-and-name.md), [docs/consumer/formats.md](docs/consumer/formats.md), [docs/consumer/load-and-resume.md](docs/consumer/load-and-resume.md), [HANDOFF.md](HANDOFF.md), [JACK_ONBOARDING.md](JACK_ONBOARDING.md), [plugin/REGISTER.md](plugin/REGISTER.md).
 
-[HANDOFF.md](HANDOFF.md) and the consumer notes still say a no-args start opens the desk and binds no port. This file follows `sessions_page.py` at this commit instead.
+[HANDOFF.md](HANDOFF.md) and the consumer notes describe the same split this file does: a no-args packaged start opens the loopback page, and `desk` is the zero-port Tk window.

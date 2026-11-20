@@ -1,12 +1,16 @@
 # Accounts and settings
 
-The full-screen page links to `/accounts.html` and `/settings.html`. Those files are served from `ui/` by `sessions_page._serve`. Accounts shows Token Center status and does not invent a balance. Settings stores theme, row density, and page size in this browser. Nothing on either page signs you in.
+The full-screen page links directly to `/accounts.html` and `/settings.html`. Those files are served from `ui/` by `sessions_page._serve`. The title-bar gear, the gear beside User Name, and the User Name control open those pages. They do not only write a status line.
 
-`POST /api/run` accepts `account_status`. If the TokenCTR bridge is not configured, the response is `status: unavailable`. The older title-bar controls described below still only write a status line.
+`/accounts.html` mounts the shared 7-tab `<solaro-account>` component (`ui/solaro-account.js`) via `solaro_core`. The tabs are account, usage, logs, billing, settings, keys, and models. In local mode it posts to `/api/run` and sends `X-CM-Token` when the page has `<meta name="cm-token">`. It does not invent a balance. Nothing on either page signs you in.
+
+`/settings.html` stores theme, row density, and page size in this browser under the `localStorage` key `cmSessions.settings`. `index.html` reads that key and applies theme, row density, and page size live.
+
+`POST /api/run` accepts `account_status` without calling `engine.dispatch`. If the TokenCTR bridge is not configured, the response is `status: unavailable`.
 
 ## What the account buttons do
 
-On the full-screen page, the bottom-left control says "User Name" and shows the initials UN. Pressing it only writes "Solaro Account: User Name" on the status line. It does not open a window, and it does not call the engine.
+On the full-screen page, the bottom-left control says "User Name" and shows the initials UN. It links to `/accounts.html`. The title bar also links Accounts to that page. It does not only write a status line, and it does not call the engine by itself.
 
 The status line on the right says "Estimates only · Token Center optional". That text is part of the page. It is not a balance, and it does not change when you scan.
 
@@ -16,7 +20,7 @@ Find, Load, Resume, and Launch do not ask who you are. They read files on this c
 
 ## What the settings buttons do
 
-The gear in the title bar only writes "Opened CM Sessions Settings & Preferences" on the status line. The gear beside User Name only writes "Opened CM Sessions preferences". Neither one opens a page or saves a setting.
+The gear in the title bar and the gear beside User Name both open `/settings.html`. Neither one only writes a status line. `index.html` reads `localStorage` `cmSessions.settings` for theme (`dark` or `light`), row density (`compact`, `regular`, or `comfortable`), and page size (`25`, `50`, `100`, or `200`) and applies them live. `/settings.html` writes that same key.
 
 These controls on the full-screen page do change what you see:
 

@@ -104,4 +104,4 @@ From this folder, run `py -3.14` and the file name. The checks are the `test_*.p
 - [JACK_ONBOARDING.md](JACK_ONBOARDING.md)
 - [plugin/REGISTER.md](plugin/REGISTER.md)
 
-The consumer notes and [HANDOFF.md](HANDOFF.md) still describe the desk as the packaged start. The launch section above is what `sessions_page.py` in this tree does.
+The launch section above is what `sessions_page.py` in this tree does. [HANDOFF.md](HANDOFF.md) and the consumer notes describe the same split: a packaged no-args start opens the loopback page, and `desk` is the zero-port Tk window.

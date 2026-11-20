@@ -208,8 +208,170 @@
       cursor: col-resize !important;
       user-select: none !important;
     }
+
+    :root {
+      --row-h: 34px;
+      --background: #07080A;
+      --card: #12151C;
+      --sidebar: #161A23;
+      --border: #2A3140;
+      --foreground: #E8ECF4;
+      --muted-foreground: #8B95A9;
+      --accent: #1E2636;
+    }
+    html[data-density="compact"] { --row-h: 26px; }
+    html[data-density="regular"] { --row-h: 34px; }
+    html[data-density="comfortable"] { --row-h: 44px; }
+    html[data-theme="light"] {
+      color-scheme: light;
+      --background: #f6f3ec;
+      --card: #fffdf8;
+      --sidebar: #efe8dc;
+      --border: #c9bfb0;
+      --foreground: #1c1915;
+      --muted-foreground: #5c5348;
+      --accent: #e7dfd2;
+    }
+    html[data-theme="light"] body,
+    html[data-theme="light"] #appRoot {
+      background: #f6f3ec !important;
+      color: #1c1915 !important;
+    }
+    html[data-theme="light"] #appRoot [class*="bg-[#0"],
+    html[data-theme="light"] #appRoot [class*="bg-[#1"] {
+      background-color: #fffdf8 !important;
+      color: #1c1915;
+    }
+    html[data-theme="light"] #appRoot [class*="text-white"],
+    html[data-theme="light"] #appRoot [class*="text-slate-100"],
+    html[data-theme="light"] #appRoot [class*="text-slate-200"],
+    html[data-theme="light"] #appRoot [class*="text-slate-300"] {
+      color: #1c1915 !important;
+    }
+    html[data-theme="light"] #appRoot [class*="text-slate-400"],
+    html[data-theme="light"] #appRoot [class*="text-slate-500"] {
+      color: #4e463c !important;
+    }
+    html[data-theme="light"] #appRoot [class*="border-[#"] {
+      border-color: #c9bfb0 !important;
+    }
+    html[data-theme="light"] .page-bar,
+    html[data-theme="light"] .harness-pill {
+      background: #fffdf8;
+      color: #1c1915;
+      border-color: #c9bfb0;
+    }
+
+    /* Offline layout if the Tailwind CDN is blocked. Online, Tailwind wins ties. */
+    body { margin: 0; font-family: "Segoe UI", sans-serif; background: var(--background); color: var(--foreground); }
+    #appRoot { display: flex; flex-direction: column; width: 100vw; height: 100vh; overflow: hidden; }
+    .flex { display: flex; }
+    .flex-col { flex-direction: column; }
+    .flex-1 { flex: 1 1 auto; min-width: 0; min-height: 0; }
+    .flex-wrap { flex-wrap: wrap; }
+    .items-center { align-items: center; }
+    .items-stretch { align-items: stretch; }
+    .items-end { align-items: flex-end; }
+    .justify-between { justify-content: space-between; }
+    .justify-center { justify-content: center; }
+    .shrink-0 { flex-shrink: 0; }
+    .min-w-0 { min-width: 0; }
+    .min-h-0 { min-height: 0; }
+    .overflow-hidden { overflow: hidden; }
+    .overflow-y-auto { overflow-y: auto; }
+    .hidden { display: none; }
+    .grid { display: grid; }
+    .relative { position: relative; }
+    .absolute { position: absolute; }
+    .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .w-screen { width: 100vw; }
+    .h-screen { height: 100vh; }
+    .w-72 { width: 18rem; flex: 0 0 18rem; }
+    .w-64 { width: 16rem; flex: 0 0 16rem; }
+    .w-12 { width: 3rem; flex: 0 0 3rem; }
+    .border-b { border-bottom: 1px solid var(--border); }
+    .border-t { border-top: 1px solid var(--border); }
+    .border-r { border-right: 1px solid var(--border); }
+    .border-l { border-left: 1px solid var(--border); }
+    button, input, select { font: inherit; color: inherit; }
+    .table-ledger-grid { display: grid; align-items: center; }
+    .page-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 32px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+      color: var(--foreground);
+      font-size: 12px;
+    }
+    .page-bar button {
+      padding: 2px 8px;
+      border: 1px solid var(--border);
+      background: var(--background);
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .page-bar button:disabled { opacity: 0.45; cursor: default; }
+    .harness-pill {
+      display: inline-flex;
+      align-items: center;
+      margin-left: 8px;
+      padding: 1px 8px;
+      border-radius: 999px;
+      border: 1px solid #3d4a38;
+      background: #141910;
+      color: #d5dec8;
+      font-size: 11px;
+    }
+    .harness-pill[hidden] { display: none; }
+    /* Tailwind's .hidden is the view switch. Keep it if the CDN is offline.
+       No !important, so a later md:inline rule can still show a hint. */
+    .hidden { display: none; }
+    .planner-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      align-items: center;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+      color: var(--foreground);
+      font-size: 12px;
+    }
+    .planner-strip input[type="text"] {
+      background: var(--background);
+      color: var(--foreground);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2px 6px;
+      min-width: 160px;
+    }
+    .planner-strip button {
+      border: 1px solid var(--border);
+      background: var(--background);
+      color: var(--foreground);
+      border-radius: 4px;
+      padding: 2px 8px;
+      cursor: pointer;
+    }
+    .goal-row, .trigger-row { display: inline-flex; align-items: center; gap: 4px; }
 </style>
   <script>
+    (function () {
+      var theme = 'dark';
+      try {
+        var raw = localStorage.getItem('cmSessions.settings');
+        var parsed = raw ? JSON.parse(raw) : null;
+        if (parsed && parsed.theme === 'light') theme = 'light';
+        var density = parsed && parsed.rowDensity;
+        if (density === 'compact' || density === 'regular' || density === 'comfortable') {
+          document.documentElement.setAttribute('data-density', density);
+        }
+      } catch (e) {}
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
     // Ensure standalone / full-screen browser rendering has CM Sessions dark theme tokens if not hosted in AGY iframe
     window.addEventListener('DOMContentLoaded', () => {
       const root = document.documentElement;
@@ -240,6 +402,7 @@
         </button>
         <span class="text-xs font-bold tracking-tight text-slate-200">CM Sessions</span>
         <span class="text-[11px] text-slate-500 font-normal">· Multi-Harness Session Store &amp; Trigger Console</span>
+        <span id="harnessPill" class="harness-pill" hidden>No harness detected — Install cmCode</span>
       </div>
 
       <div class="flex items-center gap-1.5">
@@ -608,6 +771,12 @@
 
         <!-- VIEW 1 & 2: TABLE VIEW and PROJECT VIEW (Row-Aligned Modern Tool Ledger — starts immediately below top bar!) -->
         <div id="ledgerContainer" class="flex-1 flex flex-col overflow-hidden">
+          <div id="pageBar" class="page-bar shrink-0">
+            <button type="button" id="pagePrev" onclick="changePage(-1)">Prev</button>
+            <span id="pageLabel">Page 1 / 1</span>
+            <button type="button" id="pageNext" onclick="changePage(1)">Next</button>
+            <span id="pageSlice">0–0 of 0</span>
+          </div>
           <!-- Synchronized Scroll Body: Left 2-Column Sidebar + Center Modern Tool Rows + Right Bracketed Summaries -->
           <div id="alignedBody" class="flex-1 overflow-y-auto flex items-start min-h-0 bg-[#0D111A]">
             <!-- Left Sidebar (Col 1 Maker Icon | Col 2 Session Title) + Center Modern Tool Rows rendered row-by-row -->
@@ -706,7 +875,7 @@
         <div class="w-7 border-t border-[var(--border)] my-0.5"></div>
 
         <!-- 4. Resume Session (Play Triangle Icon) -->
-        <button onclick="resumeSelected()" title="Resume in Source Harness"
+        <button id="toolbarResume" onclick="resumeSelected()" title="Resume in Source Harness"
           class="w-9 h-9 rounded-lg border border-emerald-500/50 bg-emerald-500/10 hover:bg-emerald-500/25 flex items-center justify-center text-emerald-400">
           <svg viewBox="0 0 24 24" class="w-5 h-5" fill="currentColor">
             <polygon points="6 4 20 12 6 20 6 4"/>
@@ -758,8 +927,11 @@
         <div id="statusBarText" class="text-[var(--muted-foreground)] truncate">
           TABLE VIEW · 14 sessions across 6 makers · Rows aligned 1:1 with Left Sidebar &amp; Right Summary Brackets
         </div>
-        <div class="text-[var(--muted-foreground)] shrink-0">
-          Estimates only · Token Center optional
+        <div class="flex items-center gap-1.5 shrink-0">
+          <input id="tagInline" type="text" placeholder="#tag" aria-label="Custom tag"
+            class="w-24 px-1.5 py-0.5 rounded border border-[var(--border)] bg-[var(--background)] text-xs" />
+          <button type="button" onclick="addTagToSelected()" class="px-2 py-0.5 rounded border border-[var(--border)] text-xs">Tag</button>
+          <span class="text-[var(--muted-foreground)]">Estimates only · Token Center optional</span>
         </div>
       </div>
     </div>
@@ -1068,11 +1240,117 @@
     let ACTIVE_TRANSCRIPT_LOADING = false;
     let ACTIVE_TRANSCRIPT_ERROR = null;
 
+    const CM_TOKEN = document.querySelector('meta[name="cm-token"]')?.getAttribute('content') || '';
+    const UI_DEFAULTS = { theme: 'dark', rowDensity: 'regular', pageSize: 100 };
+    let UI_SETTINGS = Object.assign({}, UI_DEFAULTS);
+    let MDATA_AXES = null;
+    let PLACE_PATHS = new Set();
+    let LAST_PLACES = null;
+
+    function readUiSettings() {
+      try {
+        const raw = localStorage.getItem('cmSessions.settings');
+        const src = raw ? JSON.parse(raw) : {};
+        const theme = src.theme === 'light' ? 'light' : 'dark';
+        const density = ['compact', 'regular', 'comfortable'].includes(src.rowDensity) ? src.rowDensity : 'regular';
+        const size = Number(src.pageSize);
+        const pageSize = [25, 50, 100, 200].includes(size) ? size : 100;
+        return { theme: theme, rowDensity: density, pageSize: pageSize };
+      } catch (e) {
+        return Object.assign({}, UI_DEFAULTS);
+      }
+    }
+
+    function applyUiSettings(next) {
+      UI_SETTINGS = next || readUiSettings();
+      const root = document.documentElement;
+      root.setAttribute('data-theme', UI_SETTINGS.theme);
+      root.setAttribute('data-density', UI_SETTINGS.rowDensity);
+      root.setAttribute('data-page-size', String(UI_SETTINGS.pageSize));
+      const heights = { compact: 26, regular: 34, comfortable: 44 };
+      ROW_H = heights[UI_SETTINGS.rowDensity] || 34;
+      root.style.setProperty('--row-h', ROW_H + 'px');
+      if (UI_SETTINGS.theme === 'light') {
+        root.style.setProperty('--background', '#f6f3ec');
+        root.style.setProperty('--card', '#fffdf8');
+        root.style.setProperty('--sidebar', '#efe8dc');
+        root.style.setProperty('--border', '#c9bfb0');
+        root.style.setProperty('--foreground', '#1c1915');
+        root.style.setProperty('--muted-foreground', '#5c5348');
+        root.style.setProperty('--accent', '#e7dfd2');
+      }
+    }
+
+    function loadAnnotations() {
+      try {
+        const raw = localStorage.getItem('cmSessions.annotations');
+        const parsed = raw ? JSON.parse(raw) : {};
+        return parsed && typeof parsed === 'object' ? parsed : {};
+      } catch (e) {
+        return {};
+      }
+    }
+
+    function saveAnnotation(id, patch) {
+      if (!id) return;
+      try {
+        const all = loadAnnotations();
+        all[id] = Object.assign({}, all[id] || {}, patch);
+        localStorage.setItem('cmSessions.annotations', JSON.stringify(all));
+      } catch (e) {}
+    }
+
+    function savePlannerState() {
+      try {
+        localStorage.setItem('cmSessions.planner', JSON.stringify({
+          goals: state.goals,
+          crons: state.crons,
+          triggers: state.triggers
+        }));
+      } catch (e) {}
+    }
+
+    function loadPlannerState() {
+      try {
+        const raw = localStorage.getItem('cmSessions.planner');
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        if (Array.isArray(data.goals)) state.goals = data.goals;
+        if (Array.isArray(data.crons)) state.crons = data.crons;
+        if (Array.isArray(data.triggers)) state.triggers = data.triggers;
+      } catch (e) {}
+    }
+
+    function estimateUsd(hit, measuredIn, measuredOut, measured) {
+      if (measuredIn == null && measuredOut == null && measured == null) return '—';
+      const inn = measuredIn != null ? measuredIn : (measuredOut == null && measured != null ? measured : (measuredIn || 0));
+      const out = measuredOut != null ? measuredOut : 0;
+      const blob = `${hit.harness || ''} ${hit.model || ''}`.toLowerCase();
+      let inRate = 2;
+      let outRate = 10;
+      if (blob.includes('hermes') || blob.includes('local')) {
+        inRate = 0; outRate = 0;
+      } else if (blob.includes('grok')) {
+        inRate = 2; outRate = 10;
+      } else if (blob.includes('claude')) {
+        inRate = 3; outRate = 15;
+      } else if (blob.includes('codex') || blob.includes('gpt') || blob.includes('openai')) {
+        inRate = 2.5; outRate = 10;
+      } else if (blob.includes('gemini') || blob.includes('agy') || blob.includes('antigravity')) {
+        inRate = 1.25; outRate = 5;
+      }
+      const val = (Number(inn) / 1000000) * inRate + (Number(out) / 1000000) * outRate;
+      if (!isFinite(val)) return '—';
+      return '$' + val.toFixed(val < 0.01 ? 4 : 2) + ' est';
+    }
+
     async function runApi(action, payload = {}) {
       const body = Object.assign({ action: action }, payload);
+      const headers = { 'Content-Type': 'application/json' };
+      if (CM_TOKEN) headers['X-CM-Token'] = CM_TOKEN;
       const res = await fetch('/api/run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify(body)
       });
       if (!res.ok) {
@@ -1120,12 +1398,26 @@
 
       const measuredIn = (typeof hit.tokens_in === 'number') ? hit.tokens_in : null;
       const measuredOut = (typeof hit.tokens_out === 'number') ? hit.tokens_out : null;
-      const measured = (typeof hit.tokens === 'number') ? hit.tokens : (
+      let measured = (typeof hit.tokens === 'number') ? hit.tokens : (
         (measuredIn != null || measuredOut != null) ? ((measuredIn || 0) + (measuredOut || 0)) : null
       );
+      // Same size/4 estimate the desk uses when a store has bytes and no counter.
+      let sized = false;
+      if (measured == null) {
+        const bytes = Number(hit.bytes);
+        if (Number.isFinite(bytes) && bytes > 0) {
+          measured = Math.round(bytes / 4);
+          sized = true;
+        }
+      }
       const approxTokens = measured;
-      const estCost = '—';
+      const estCost = estimateUsd(hit, measuredIn, measuredOut, measured);
       const displayTokens = measured != null ? formatK(measured) : '—';
+      const notes = loadAnnotations()[hit.id] || {};
+      if (typeof notes.title === 'string' && notes.title.trim()) title = notes.title.trim();
+      const tag3 = (typeof notes.tag3 === 'string' && notes.tag3.trim())
+        ? notes.tag3.trim()
+        : ('#' + bracket);
 
       return {
         id: hit.id,
@@ -1139,14 +1431,14 @@
         topic: topic,
         summary: summary,
         proj: proj,
-        tokIn: measuredIn != null ? formatK(measuredIn) : '—',
+        tokIn: measuredIn != null ? formatK(measuredIn) : (sized && measured != null ? formatK(measured) : '—'),
         tokOut: measuredOut != null ? formatK(measuredOut) : '—',
         tokens: displayTokens,
         tokensRaw: approxTokens,
         cost: estCost,
         tag1: '#' + proj.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 10),
         tag2: '#' + harnessKey,
-        tag3: '#' + bracket,
+        tag3: tag3,
         cwd: hit.cwd || hit.path || '',
         model: hit.model || '',
         rawHit: hit
@@ -1184,15 +1476,12 @@
           SESSIONS = []; state.selectedId = ''; state.openTabs = []; flash('Scan completed: no sessions returned'); syncCalendarFromSessions();
         }
 
-        fetch('/api/places').then(r => r.json()).then(places => {
-          if (places && places.drives) {
-            updateDrivesFromPlaces(places, res.gate);
-          }
-        }).catch(() => {});
+        loadPlaces(res && res.gate);
 
       } catch (err) {
         if (btn) btn.classList.remove('animate-pulse');
         SESSIONS = []; state.selectedId = ''; state.openTabs = []; flash(`Scan note: ${err.message}`);
+        loadPlaces(null);
       }
 
       updateUI();
@@ -1263,17 +1552,67 @@
       }
     }
 
+    function rememberPlacePaths(places) {
+      PLACE_PATHS = new Set();
+      if (!places) return;
+      (places.drives || []).forEach(d => {
+        if (!d) return;
+        if (d.path) PLACE_PATHS.add(String(d.path));
+        if (d.id) PLACE_PATHS.add(String(d.id));
+      });
+      (places.homes || []).forEach(h => {
+        if (!h) return;
+        if (h.path) PLACE_PATHS.add(String(h.path));
+        if (h.candidate) PLACE_PATHS.add(String(h.candidate));
+      });
+    }
+
+    function updateHarnessPill(places) {
+      const el = document.getElementById('harnessPill');
+      if (!el) return;
+      const homes = places && Array.isArray(places.homes) ? places.homes : [];
+      const drives = places && Array.isArray(places.drives) ? places.drives : [];
+      const allAbsent = homes.length > 0 && homes.every(h => h && h.status === 'ABSENT');
+      const placesEmpty = places == null || (homes.length === 0 && drives.length === 0);
+      const show = allAbsent || (SESSIONS.length === 0 && placesEmpty);
+      el.hidden = !show;
+    }
+
+    async function loadPlaces(gate) {
+      let places = null;
+      try {
+        const res = await fetch('/api/places');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        places = await res.json();
+        if (!places || !Array.isArray(places.drives)) throw new Error('places');
+        LAST_PLACES = places;
+        rememberPlacePaths(places);
+        updateDrivesFromPlaces(places, gate || null);
+        (DRIVES || []).forEach(d => {
+          (d.folders || []).forEach(f => { if (f && f.path) PLACE_PATHS.add(String(f.path)); });
+        });
+      } catch (err) {
+        DRIVES = [];
+        PLACE_PATHS = new Set();
+        LAST_PLACES = null;
+        places = null;
+      }
+      updateHarnessPill(places);
+      renderDrivesMode();
+      updateUI();
+    }
+
     function syncCalendarFromSessions() {
       const next = {};
       const now = new Date();
       (SESSIONS || []).forEach(s => {
         if (!s.rawHit || !s.rawHit.updated) return;
         const d = new Date(s.rawHit.updated * 1000);
-        if (d.getFullYear() !== now.getFullYear() || d.getMonth() !== now.getMonth()) return;
+        if (d.getFullYear() !== state.calendarYear || d.getMonth() !== state.calendarMonth) return;
         const day = d.getDate();
         if (!next[day]) {
           next[day] = {
-            num: day, curr: true, today: day === now.getDate(), heat: 0, cost: '—', hours: '—',
+            num: day, curr: true, today: day === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(), heat: 0, cost: '—', hours: '—',
             summary: s.title, makers: [], sessions: [], events: []
           };
         }
@@ -1302,46 +1641,7 @@
 
     let SESSIONS = [];
 
-    let DRIVES = [
-      {
-        id: 'C:\\', name: 'C:\\ System NVMe', kind: 'System Drive', free: '412 GB free',
-        folders: [
-          { path: 'C:\\Users\\Papa\\.claude\\projects', maker: 'claude', count: 42, size: '18.4 MB', note: 'Claude Code JSONL project transcripts' },
-          { path: 'C:\\Users\\Papa\\.codex\\sessions', maker: 'codex', count: 31, size: '14.2 MB', note: 'Codex rollout JSONL & .jsonl.zst archives' },
-          { path: 'C:\\Users\\Papa\\.gemini\\antigravity\\brain', maker: 'agy', count: 27, size: '64.0 MB', note: 'Antigravity conversation DBs & logs' },
-          { path: 'C:\\Users\\Papa\\.gemini\\tmp', maker: 'gemini', count: 19, size: '6.1 MB', note: 'Gemini CLI chat histories' },
-          { path: 'C:\\Users\\Papa\\.hermes\\profiles', maker: 'hermes', count: 15, size: '22.8 MB', note: 'Hermes state.db SQLite session stores' },
-        ]
-      },
-      {
-        id: 'V:\\', name: 'V:\\ Streams & COSMOS', kind: 'Local Workspace Drive', free: '1,840 GB free',
-        folders: [
-          { path: 'V:\\a\\ai\\COSMOS\\builds\\sessions-page\\var', maker: 'claude', count: 14, size: '9.5 MB', note: 'cmSessions index.jsonl, handoffs & exports' },
-          { path: 'V:\\a\\ai\\COSMOS\\live\\state\\session_saves', maker: 'grok', count: 38, size: '41.0 MB', note: 'COSMOS TidyUP / BootUP live session packs' },
-          { path: 'V:\\streams\\cmsessions', maker: 'agy', count: 11, size: '4.8 MB', note: 'cmSessions snapshot & fixtures' },
-        ]
-      },
-      {
-        id: 'W:\\', name: 'W:\\ Cosmos Code Repo', kind: 'Local Workspace Drive', free: '920 GB free',
-        folders: [
-          { path: 'W:\\Cosmos_code_repo\\harness_repo', maker: 'grok', count: 24, size: '31.2 MB', note: 'V5 Master Architecture & multi-model reviews' },
-          { path: 'W:\\Cosmos_code_repo\\empirical_test_data', maker: 'codex', count: 18, size: '12.7 MB', note: 'Harness benchmark transcripts' },
-        ]
-      },
-      {
-        id: 'NET-LAB', name: '\\\\SolaroLab\\mesh-sessions', kind: 'Network / Lab Share', free: '4.2 TB free',
-        folders: [
-          { path: '\\\\SolaroLab\\mesh-sessions\\adversarial_runs', maker: 'gemini', count: 52, size: '118 MB', note: 'Cross-family check transcripts (Grok ↔ Gemini ↔ Claude)' },
-          { path: '\\\\SolaroLab\\mesh-sessions\\cluster_ledgers', maker: 'hermes', count: 29, size: '45 MB', note: 'Shared lab cluster session ledgers' },
-        ]
-      },
-      {
-        id: 'OTHER-WSL', name: 'WSL // Ubuntu-24.04', kind: 'Other / Container Store', free: '280 GB free',
-        folders: [
-          { path: '\\\\wsl.localhost\\Ubuntu\\home\\papa\\.pi\\agent\\sessions', maker: 'codex', count: 9, size: '3.2 MB', note: 'Pi coding agent Linux sessions' },
-        ]
-      }
-    ];
+    let DRIVES = [];
 
     const BRACKET_META = {
       daily:     { title: 'Daily Summary',     range: '0–24h',   color: 'border-l-[#64748B] text-slate-100', summary: '• 642 UI & Maker+Harness icons\n• Hermes multi-tab session bar\n• In/Out token & 30d cost split\n• Top-bar font & size selectors' },
@@ -1350,8 +1650,9 @@
       quarterly: { title: 'Quarterly',         range: '31d–90d', color: 'border-l-[#64748B] text-slate-100', summary: '• Multi-agent cluster seat router\n• 22-vendor unified session schema' },
     };
 
-    const ROW_H = 42;
+    let ROW_H = 34;
 
+    const _now = new Date();
     let state = {
       leftScope: 'sessions',
       mainMode: 'table',
@@ -1368,8 +1669,9 @@
       expandedProjects: new Set(['cmSessions']),
       leftCollapsed: false,
       rightCollapsed: false,
-      calendarYear: 2026,
-      calendarMonth: 10, // November (0-based)
+      page: 1,
+      calendarYear: _now.getFullYear(),
+      calendarMonth: _now.getMonth(),
       calendarRailOpen: false,
       calendarSubMode: 'month', // 'month' | 'week'
       selectedCalendarDay: new Date().getDate(),   // active day inspected in left pane
@@ -1479,6 +1781,60 @@
         });
       }
       return list;
+    }
+
+    function pageSize() {
+      const n = Number(UI_SETTINGS && UI_SETTINGS.pageSize);
+      return [25, 50, 100, 200].includes(n) ? n : 100;
+    }
+
+    function pagedSessions() {
+      const all = filteredSessions();
+      const size = pageSize();
+      const pages = Math.max(1, Math.ceil(all.length / size) || 1);
+      let page = Number(state.page) || 1;
+      if (page > pages) page = pages;
+      if (page < 1) page = 1;
+      state.page = page;
+      const start = (page - 1) * size;
+      return { all: all, rows: all.slice(start, start + size), page: page, pages: pages, start: start, size: size };
+    }
+
+    function paintPager(info) {
+      const label = document.getElementById('pageLabel');
+      const slice = document.getElementById('pageSlice');
+      const prev = document.getElementById('pagePrev');
+      const next = document.getElementById('pageNext');
+      const total = info ? info.all.length : 0;
+      const from = total ? info.start + 1 : 0;
+      const to = total ? Math.min(total, info.start + info.rows.length) : 0;
+      if (label) label.textContent = 'Page ' + (info ? info.page : 1) + ' / ' + (info ? info.pages : 1);
+      if (slice) slice.textContent = from + '–' + to + ' of ' + total;
+      if (prev) prev.disabled = !info || info.page <= 1;
+      if (next) next.disabled = !info || info.page >= info.pages;
+    }
+
+    function changePage(delta) {
+      const info = pagedSessions();
+      state.page = Math.min(info.pages, Math.max(1, info.page + delta));
+      updateUI();
+    }
+
+    function bracketBullets(bKey, bRows) {
+      if (!bRows || !bRows.length) return '• Quiet span';
+      const tally = (pick) => {
+        const counts = {};
+        bRows.forEach(s => {
+          const name = pick(s);
+          if (!name) return;
+          counts[name] = (counts[name] || 0) + 1;
+        });
+        return Object.entries(counts).sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
+      };
+      const top = (rows) => rows.slice(0, 2).map(([name, n]) => name + ' (' + n + ')').join(', ');
+      const projects = tally(s => s.proj);
+      const harnesses = tally(s => (HARNESSES[s.harness] && HARNESSES[s.harness].name) || s.harness);
+      return '• ' + bRows.length + ' sessions\n• ' + (top(projects) || 'No project') + '\n• ' + (top(harnesses) || 'No harness');
     }
 
     function setSort(col, dir = 'asc') {
@@ -1638,7 +1994,7 @@
           class="flex items-stretch cursor-pointer group">
           <!-- LEFT SIDEBAR: Col 1 = Model Maker Icon | Col 2 = Harness Icon | Col 3 = Larger Session Title + Age + Subtle Status Marker -->
           <div class="${leftWidthClass} flex items-center px-1.5 border-r border-[#243046] bg-[#111621]">
-            <div class="w-full h-[36px] rounded-lg flex items-stretch relative transition ${sidebarBoxCls}">
+            <div class="w-full rounded-lg flex items-stretch relative transition ${sidebarBoxCls}" style="height:${Math.max(18, ROW_H - 6)}px">
               ${isSel ? '<div class="w-1 my-1.5 ml-0.5 rounded-full bg-blue-400 shrink-0"></div>' : ''}
               ${isActive && !isSel ? '<div class="w-1 my-1.5 ml-0.5 rounded-full bg-amber-400 shrink-0"></div>' : ''}
               <!-- Sidebar Column 1: Exact Model Maker Icon (Circular / soft pill) -->
@@ -1662,9 +2018,9 @@
 
           <!-- MAIN WINDOW MODERN TOOL ROW (Taller & Skinnier typography, Input/Output Token Split, Zero Spreadsheet Grid) -->
           <div class="flex-1 flex items-center px-2 bg-[#0D111A] min-w-0">
-            <div class="w-full h-[36px] rounded-lg table-ledger-grid items-center tracking-tight min-w-0 px-1.5 transition ${
+            <div class="w-full rounded-lg table-ledger-grid items-center tracking-tight min-w-0 px-1.5 transition ${
               isSel ? 'bg-[#172236] border border-blue-500/70' : (idx % 2 === 1 ? 'bg-[#101520] group-hover:bg-[#151C2B]' : 'group-hover:bg-[#151C2B]')
-            }">
+            }" style="height:${Math.max(18, ROW_H - 6)}px">
               <div class="table-col-cell px-1 truncate font-medium text-slate-100 flex items-center gap-1.5 tall-summary-text">
                 <span class="w-2 h-2 rounded-full shrink-0" style="background:${m.dot}"></span>
                 <span class="truncate">${safeTopic}</span>
@@ -1701,20 +2057,23 @@
     function renderTableAndProjectLedger() {
       const rowsHost = document.getElementById('alignedRowsHost');
       const bracketHost = document.getElementById('rightBracketHost');
-      const rows = filteredSessions();
+      const pageInfo = pagedSessions();
+      const rows = pageInfo.rows;
+      const counted = pageInfo.all;
+      paintPager(pageInfo);
 
       const rCol = document.getElementById('rightColHead');
       if (rCol) rCol.classList.toggle('hidden', state.rightCollapsed);
       bracketHost.classList.toggle('hidden', state.rightCollapsed);
 
       const elSessions = document.getElementById('hdrCountSessions');
-      if (elSessions) elSessions.textContent = String(rows.length);
+      if (elSessions) elSessions.textContent = String(counted.length);
       const elTopics = document.getElementById('hdrCountTopics');
-      if (elTopics) elTopics.textContent = String(new Set(rows.map(r => r.topic)).size);
+      if (elTopics) elTopics.textContent = String(new Set(counted.map(r => r.topic)).size);
       const elProj = document.getElementById('hdrCountProj');
-      if (elProj) elProj.textContent = String(new Set(rows.map(r => r.proj)).size);
+      if (elProj) elProj.textContent = String(new Set(counted.map(r => r.proj)).size);
       const bcCount = document.getElementById('tableBreadcrumbCount');
-      if (bcCount) bcCount.textContent = `${rows.length} Visible (${SESSIONS.length} Indexed)`;
+      if (bcCount) bcCount.textContent = `${counted.length} Visible (${SESSIONS.length} Indexed)`;
 
       if (state.mainMode === 'projects') {
         const discovered = [...new Set(SESSIONS.map(s => s.proj).filter(Boolean))];
@@ -1739,7 +2098,7 @@
             <div onclick="toggleProjectExpand('${proj}')" style="height:${ROW_H}px"
               class="flex items-stretch cursor-pointer font-bold text-xs">
               <div class="${leftW} flex items-center px-1.5 border-r border-[#263044] bg-[#121620]">
-                <div class="w-full h-[36px] rounded-md bg-[#181F2E] border border-[#28334A] flex items-stretch">
+                <div class="w-full rounded-md bg-[#181F2E] border border-[#28334A] flex items-stretch" style="height:${Math.max(18, ROW_H - 6)}px">
                   <div class="w-9 shrink-0 border-r border-[#242D40] flex items-center justify-center text-blue-400">
                     ${expanded ? '▾' : '▸'} 📁
                   </div>
@@ -1787,7 +2146,7 @@
               <span class="px-1.5 py-0.5 rounded bg-[#0D111A] font-mono text-[11.5px] text-slate-400 shrink-0">${meta.range} · ${bRows.length}</span>
             </div>
             <div class="tall-bracket-text text-slate-200 whitespace-pre-line">
-              ${meta.summary}
+              ${escapeHtml(bracketBullets(bKey, bRows))}
             </div>
           </div>
         `;
@@ -1831,6 +2190,15 @@
 
     function renderDrivesMode() {
       const listHost = document.getElementById('drivesListHost');
+      if (!listHost) return;
+      if (!DRIVES.length) {
+        listHost.innerHTML = '<div class="px-2.5 py-3 text-xs text-[var(--muted-foreground)]">No drives reported.</div>';
+        const title = document.getElementById('driveCardsTitle');
+        if (title) title.textContent = 'Session Storage Folders';
+        const cards = document.getElementById('driveFolderCards');
+        if (cards) cards.innerHTML = '';
+        return;
+      }
       listHost.innerHTML = DRIVES.map(d => {
         const active = d.id === state.activeDriveId;
         return `
@@ -1883,11 +2251,11 @@
         return `
           <div onclick="openSessionTab('${escapeJs(s.id)}')" style="height:${ROW_H}px"
             class="flex items-center px-2 cursor-pointer text-xs group">
-            <div class="w-full h-[38px] rounded-lg flex items-stretch transition ${
+            <div class="w-full rounded-lg flex items-stretch transition ${
               active
                 ? 'bg-[#222C42] border border-blue-500/70 shadow-sm font-bold'
                 : 'hover:bg-[#1B2233] border border-transparent'
-            }">
+            }" style="height:${Math.max(18, ROW_H - 8)}px">
               ${active ? '<div class="w-1 my-1.5 ml-0.5 rounded-full bg-blue-400 shrink-0"></div>' : ''}
               <div class="w-11 shrink-0 border-r border-[#242D40] flex items-center justify-center">
                 ${makerBadgeHTML(s.maker, 'md')}
@@ -2024,7 +2392,7 @@
             ${makerBadgeHTML(s.maker, 'md')}
             <div class="min-w-0">
               <div class="text-sm font-bold text-white truncate flex items-center gap-2">
-                <span>${escapeHtml(s.title)}</span>
+                <span id="inspectorTitle" title="Double-click to rename" ondblclick="beginInspectorTitleEdit('${escapeJs(s.id)}')">${escapeHtml(s.title)}</span>
                 <span class="text-xs font-mono text-slate-400 select-all font-normal">(${escapeHtml(s.id)})</span>
               </div>
               <div class="text-xs text-[var(--muted-foreground)] truncate">
@@ -2051,11 +2419,7 @@
             </button>
             <span class="text-[var(--muted-foreground)]">or Hand Off transcript to:</span>
             <select id="handoffPicker" class="px-2 py-1 rounded bg-[var(--background)] border border-[var(--border)] text-xs text-slate-200">
-              <option>Antigravity · Gemini 4 Argon</option>
-              <option>Claude Code · Claude Opus 4.6</option>
-              <option>Codex · GPT-5.1 Codex</option>
-              <option>Grok.exe · Grok 4.7</option>
-              <option>Hermes · Hermes Agent</option>
+              ${handoffOptionsHtml()}
             </select>
             <button onclick="handoffSelected()" class="px-2.5 py-1 rounded border border-blue-400 text-blue-300 hover:bg-blue-500/20 font-bold transition">
               ↗ Hand Off &amp; Record Child
@@ -2154,6 +2518,7 @@
       const g = state.goals.find(x => x.id === id);
       if (g) {
         g.done = !g.done;
+        savePlannerState();
         renderCalendarView();
         flash(`Goal "${g.text}": ${g.done ? "Marked complete ✓" : "Re-opened"}`);
       }
@@ -2165,6 +2530,7 @@
       const text = inp.value.trim();
       state.goals.push({ id: "g" + Date.now(), text, done: false });
       inp.value = "";
+      savePlannerState();
       renderCalendarView();
       flash(`Added objective: "${text}"`);
     }
@@ -2185,9 +2551,29 @@
       const s = SESSIONS.find(x => x.id === id);
       if (s && val && val.trim()) {
         s.title = val.trim();
+        saveAnnotation(id, { title: s.title });
         flash(`Updated session title: "${s.title}"`);
       }
-      renderCalendarView();
+      updateUI();
+    }
+
+    function beginInspectorTitleEdit(id) {
+      const el = document.getElementById("inspectorTitle");
+      if (!el) return;
+      const cur = el.innerText;
+      el.outerHTML = `<input id="inlineInput_${id}" type="text" value="${escapeHtml(cur)}"
+        onblur="saveSessionTitle('${escapeJs(id)}', this.value)"
+        onkeydown="if(event.key==='Enter'){event.preventDefault(); this.blur();} if(event.key==='Escape'){updateUI();}"
+        class="bg-[#0E1624] border border-blue-400 text-white text-xs px-1 py-0.5 rounded outline-none" />`;
+      const inp = document.getElementById("inlineInput_" + id);
+      if (inp) { inp.focus(); inp.select(); }
+    }
+
+    function selectedOverCeiling() {
+      const s = SESSIONS.find(x => x.id === state.selectedId);
+      if (!s || s.maker !== 'grok') return false;
+      const tok = parseTokenCount(s);
+      return tok != null && tok >= 180000;
     }
 
     function openTriggerModal(anchorName = "GCP Vertex $157.56 Trial Expiry", anchorCategory = "quota") {
@@ -2308,29 +2694,76 @@
     }
 
     function saveTriggerFromModal(anchorName) {
-      const offset = document.getElementById("trigOffsetVal")?.value || "-48";
+      const nameEl = document.getElementById("trigAnchorName");
+      const eventName = (nameEl && nameEl.value.trim()) || anchorName || "Event";
+      const offsetRaw = document.getElementById("trigOffsetVal")?.value || "0";
       const unit = document.getElementById("trigOffsetUnit")?.value || "hours";
-      const backdated = document.getElementById("trigBackdated")?.checked ?? true;
+      const offset = Number(offsetRaw);
+      const anchorDay = state.selectedCalendarDay || new Date().getDate();
+      const when = new Date(state.calendarYear, state.calendarMonth, anchorDay);
+      if (Number.isFinite(offset) && unit === "days") when.setDate(when.getDate() + offset);
+      else if (Number.isFinite(offset) && unit === "hours") when.setTime(when.getTime() + offset * 3600000);
+      const targetDay = when.getDate();
       const id = "trig_" + Date.now();
-      const trigName = `Trigger: ${offset}${unit[0]} (${anchorName}) -> Auto-Switch Rail & Audit`;
+      const trigName = `Trigger: ${offsetRaw}${String(unit || "h")[0]} (${eventName}) -> Auto-Switch Rail & Audit`;
       state.triggers.push({
         id,
         name: trigName,
-        targetDay: 13,
-        anchorDay: 15,
-        eventName: anchorName,
+        targetDay: targetDay,
+        anchorDay: anchorDay,
+        year: when.getFullYear(),
+        month: when.getMonth(),
+        eventName: eventName,
         action: "Auto-Switch Rail & Audit"
       });
+      savePlannerState();
       closeTriggerModal();
       renderCalendarView();
-      flash(`Saved trigger: "${trigName}" (Projected on grid!)`);
+      flash(`Saved trigger: "${trigName}" on ${monthShort(when.getMonth())} ${targetDay}`);
     }
 
     
     let CALENDAR_DAYS_DATA = {};
 
+    const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const MONTH_FULL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+    function monthShort(month) {
+      return MONTH_SHORT[((month % 12) + 12) % 12] || 'Jan';
+    }
+
+    function daysInMonth(year, month) {
+      return new Date(year, month + 1, 0).getDate();
+    }
+
+    function clampCalendarDay() {
+      const dim = daysInMonth(state.calendarYear, state.calendarMonth);
+      if (state.selectedCalendarDay > dim) state.selectedCalendarDay = dim;
+      if (state.selectedCalendarDay < 1) state.selectedCalendarDay = 1;
+      if (state.focusedWeekDay > dim) state.focusedWeekDay = dim;
+      if (state.focusedWeekDay < 1) state.focusedWeekDay = 1;
+    }
+
+    function jumpToToday() {
+      const now = new Date();
+      state.calendarYear = now.getFullYear();
+      state.calendarMonth = now.getMonth();
+      state.selectedCalendarDay = now.getDate();
+      state.focusedWeekDay = now.getDate();
+      renderCalendarView();
+      flash('Jumped to Today: ' + monthShort(now.getMonth()) + ' ' + now.getDate() + ', ' + now.getFullYear());
+    }
+
     function selectCalendarDay(dayNum) {
       state.selectedCalendarDay = dayNum;
+      renderCalendarView();
+    }
+
+    function setCalendarDate(year, month, day) {
+      state.calendarYear = year;
+      state.calendarMonth = month;
+      state.selectedCalendarDay = day;
+      state.focusedWeekDay = day;
       renderCalendarView();
     }
 
@@ -2338,8 +2771,9 @@
       state.calendarSubMode = 'week';
       state.selectedCalendarDay = dayNum;
       state.focusedWeekDay = dayNum;
+      const label = monthShort(state.calendarMonth);
       renderCalendarView();
-      flash(`Opened Week View for week of Nov ${dayNum} (Focus: Nov ${dayNum})`);
+      flash(`Opened Week View for week of ${label} ${dayNum} (Focus: ${label} ${dayNum})`);
     }
 
     function openMonthView() {
@@ -2348,19 +2782,31 @@
       flash(`Switched to Month View`);
     }
 
-    function prevCalendarDay() {
-      let d = state.selectedCalendarDay - 1;
-      if (d < 1) d = 30;
-      state.selectedCalendarDay = d;
-      state.focusedWeekDay = d;
+    function shiftCalendarDay(delta) {
+      const when = new Date(state.calendarYear, state.calendarMonth, state.selectedCalendarDay || 1);
+      when.setDate(when.getDate() + delta);
+      state.calendarYear = when.getFullYear();
+      state.calendarMonth = when.getMonth();
+      state.selectedCalendarDay = when.getDate();
+      state.focusedWeekDay = when.getDate();
       renderCalendarView();
     }
 
+    function prevCalendarDay() {
+      shiftCalendarDay(-1);
+    }
+
     function nextCalendarDay() {
-      let d = state.selectedCalendarDay + 1;
-      if (d > 30) d = 1;
-      state.selectedCalendarDay = d;
-      state.focusedWeekDay = d;
+      shiftCalendarDay(1);
+    }
+
+    function shiftWeek(deltaDays) {
+      const when = new Date(state.calendarYear, state.calendarMonth, state.focusedWeekDay || state.selectedCalendarDay || 1);
+      when.setDate(when.getDate() + deltaDays);
+      state.calendarYear = when.getFullYear();
+      state.calendarMonth = when.getMonth();
+      state.focusedWeekDay = when.getDate();
+      state.selectedCalendarDay = when.getDate();
       renderCalendarView();
     }
 
@@ -2382,11 +2828,12 @@
       };
 
       const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-      // For Nov 2026, Nov 1 is Sunday (day of week 0)
-      const dowIndex = (dayNum - 1) % 7; 
-      // Nov 1 = Sun(0), Nov 2 = Mon(1), Nov 3 = Tue(2), Nov 4 = Wed(3), Nov 5 = Thu(4), Nov 6 = Fri(5), Nov 7 = Sat(6), Nov 8 = Sun(0)
-      const dow = dayNames[dowIndex];
-      const isToday = dayNum === 8;
+      const viewed = new Date(state.calendarYear, state.calendarMonth, dayNum);
+      const dow = dayNames[viewed.getDay()];
+      const todayDate = new Date();
+      const isToday = viewed.getFullYear() === todayDate.getFullYear()
+        && viewed.getMonth() === todayDate.getMonth()
+        && viewed.getDate() === todayDate.getDate();
 
       // Timeline Visual Bar (08:00 to 20:00 = 12 hours)
       const timelineSegments = (dayData.sessions || []).map(s => {
@@ -2430,7 +2877,7 @@
             <div class="flex items-start gap-2 pt-0.5">
               ${miniMakerBulletHTML(s.maker)}
               <div class="flex-1 min-w-0">
-                <div class="text-xs font-semibold text-slate-100 truncate group-hover:text-blue-300 transition-colors">${s.title}</div>
+                <div id="calChipTitle_${s.id}" ondblclick="event.stopPropagation(); inlineEditSessionTitle('${escapeJs(s.id)}')" class="text-xs font-semibold text-slate-100 truncate group-hover:text-blue-300 transition-colors">${escapeHtml(s.title)}</div>
                 <div class="flex items-center gap-1.5 text-[10.5px] text-slate-400 mt-1 font-mono flex-wrap">
                   <span class="text-xs font-bold" style="color:${m.color}">${s.model}</span>
                   <span class="text-slate-600">·</span>
@@ -2467,7 +2914,7 @@
           <div class="flex items-center justify-between border-b border-[#1E283C] pb-2">
             <div>
               <div class="flex items-center gap-1.5">
-                <span class="text-xs font-bold text-white uppercase tracking-wider font-mono">${dow}, Nov ${dayNum}</span>
+                <span class="text-xs font-bold text-white uppercase tracking-wider font-mono">${dow}, ${monthShort(state.calendarMonth)} ${dayNum}</span>
                 ${isToday ? '<span class="px-1.5 py-0.2 rounded bg-blue-600 text-[9.5px] font-bold text-white uppercase tracking-wide">TODAY</span>' : ''}
               </div>
               <div class="text-[11px] text-slate-400 mt-0.5">Daily Session & Hourly Breakdown</div>
@@ -2533,35 +2980,42 @@
           <!-- Jump to Week View Button -->
           <button onclick="openWeekView(${dayNum})"
                   class="w-full py-1.5 px-3 rounded-lg bg-[#14223A] hover:bg-[#1C3052] border border-blue-500/80 text-blue-200 text-xs font-semibold flex items-center justify-center gap-1.5 shadow transition">
-            <span>📆 Focus Week of Nov ${dayNum} →</span>
+            <span>📆 Focus Week of ${monthShort(state.calendarMonth)} ${dayNum} →</span>
           </button>
         </div>
       `;
     }
 
     function renderMonthGrid() {
-      // 35 Day cells for November 2026 (Mon Oct 26 .. Sun Nov 29)
+      const year = state.calendarYear;
+      const month = state.calendarMonth;
+      const dim = daysInMonth(year, month);
+      const todayDate = new Date();
+      const firstDow = new Date(year, month, 1).getDay();
+      const startPad = (firstDow + 6) % 7;
+      const prevDim = new Date(year, month, 0).getDate();
       const dayCells = [];
-      for (let d = 26; d <= 31; d++) {
-        dayCells.push({ num: d, curr: false, today: false, heat: 0, cost: "—", hours: "—", summary: "", makers: [] });
+      for (let i = startPad - 1; i >= 0; i--) {
+        dayCells.push({ num: prevDim - i, curr: false, today: false, heat: 0, cost: "—", hours: "—", summary: "", makers: [] });
       }
-
-      for (let d = 1; d <= 30; d++) {
-        const dd = CALENDAR_DAYS_DATA[d] || {
-          num: d, curr: true, today: d === new Date().getDate(), heat: 0, cost: "—", hours: "—",
+      for (let d = 1; d <= dim; d++) {
+        const live = CALENDAR_DAYS_DATA[d];
+        const isToday = todayDate.getFullYear() === year && todayDate.getMonth() === month && todayDate.getDate() === d;
+        const dd = live ? Object.assign({}, live, { num: d, curr: true, today: isToday }) : {
+          num: d, curr: true, today: isToday, heat: 0, cost: "—", hours: "—",
           summary: "", makers: []
         };
         dayCells.push(dd);
       }
-
-      // Trailing Dec 1..6
-      for (let d = 1; d <= 6; d++) {
-        dayCells.push({ num: d, curr: false, today: false, heat: 0, cost: "—", hours: "—", summary: "", makers: [] });
+      let nextNum = 1;
+      while (dayCells.length % 7 !== 0) {
+        dayCells.push({ num: nextNum, curr: false, today: false, heat: 0, cost: "—", hours: "—", summary: "", makers: [] });
+        nextNum += 1;
       }
 
       const activeDay = state.selectedCalendarDay;
 
-      const cellsHtml = dayCells.slice(0, 35).map(cell => {
+      const cellsHtml = dayCells.map(cell => {
         const isToday = cell.today;
         const isSelected = cell.curr && cell.num === activeDay;
         
@@ -2639,88 +3093,26 @@
     }
 
     function renderWeekView() {
-      const focusedDay = state.focusedWeekDay || state.selectedCalendarDay || 8;
-
-      // Determine which week of November 2026 the focused day belongs to (Mon..Sun)
-      // Nov 1 is Sunday (part of week 1: Oct 26..Nov 1)
-      // Nov 2..Nov 8: Week 2
-      // Nov 9..Nov 15: Week 3
-      // Nov 16..Nov 22: Week 4
-      // Nov 23..Nov 29: Week 5
-      // Nov 30..Dec 6: Week 6
-      let weekDays = [];
-      let weekLabel = "";
-
-      if (focusedDay === 1) {
-        weekLabel = "Week 44: Oct 26 – Nov 1, 2026";
-        weekDays = [
-          { num: 26, curr: false, dname: "MONDAY", summary: "Archive Walk" },
-          { num: 27, curr: false, dname: "TUESDAY", summary: "State Dump" },
-          { num: 28, curr: false, dname: "WEDNESDAY", summary: "Harness Sync" },
-          { num: 29, curr: false, dname: "THURSDAY", summary: "DB Compaction" },
-          { num: 30, curr: false, dname: "FRIDAY", summary: "Model Rail Probe" },
-          { num: 31, curr: false, dname: "SATURDAY", summary: "Cold Storage" },
-          { num: 1,  curr: true,  dname: "SUNDAY", summary: "Initial Index Walk" },
-        ];
-      } else if (focusedDay >= 2 && focusedDay <= 8) {
-        weekLabel = "Week 45: Nov 2 – Nov 8, 2026";
-        weekDays = [
-          { num: 2, curr: true, dname: "MONDAY", summary: "V5 Spec Review & cDeck" },
-          { num: 3, curr: true, dname: "TUESDAY", summary: "Refactor Store Parsers" },
-          { num: 4, curr: true, dname: "WEDNESDAY", summary: "Multi-Tab Strip & UI Polish" },
-          { num: 5, curr: true, dname: "THURSDAY", summary: "Handoff Chain Audit" },
-          { num: 6, curr: true, dname: "FRIDAY", summary: "Adversarial Check Run" },
-          { num: 7, curr: true, dname: "SATURDAY", summary: "Weekly Stage Maintenance" },
-          { num: 8, curr: true, dname: "SUNDAY", summary: "642 UI & Calendar Engine" },
-        ];
-      } else if (focusedDay >= 9 && focusedDay <= 15) {
-        weekLabel = "Week 46: Nov 9 – Nov 15, 2026";
-        weekDays = [
-          { num: 9,  curr: true, dname: "MONDAY", summary: "Database WAL Stage" },
-          { num: 10, curr: true, dname: "TUESDAY", summary: "Codex Scan & State Reader" },
-          { num: 11, curr: true, dname: "WEDNESDAY", summary: "OpenWork Protocol Check" },
-          { num: 12, curr: true, dname: "THURSDAY", summary: "TokenCenter Key Pass" },
-          { num: 13, curr: true, dname: "FRIDAY", summary: "Vertex Rail Failover Prep" },
-          { num: 14, curr: true, dname: "SATURDAY", summary: "Session Schema Staging" },
-          { num: 15, curr: true, dname: "SUNDAY", summary: "Freeze Schema V2.4" },
-        ];
-      } else if (focusedDay >= 16 && focusedDay <= 22) {
-        weekLabel = "Week 47: Nov 16 – Nov 22, 2026";
-        weekDays = [
-          { num: 16, curr: true, dname: "MONDAY", summary: "Cross-Engine Benchmarks" },
-          { num: 17, curr: true, dname: "TUESDAY", summary: "PyInstaller Exe Build" },
-          { num: 18, curr: true, dname: "WEDNESDAY", summary: "GrokBot Seat Failover" },
-          { num: 19, curr: true, dname: "THURSDAY", summary: "Cluster Network Test" },
-          { num: 20, curr: true, dname: "FRIDAY", summary: "Token Velocity Monitor" },
-          { num: 21, curr: true, dname: "SATURDAY", summary: "Batch Embed & Throttle" },
-          { num: 22, curr: true, dname: "SUNDAY", summary: "Post-Burn Circuit Check" },
-        ];
-      } else if (focusedDay >= 23 && focusedDay <= 29) {
-        weekLabel = "Week 48: Nov 23 – Nov 29, 2026";
-        weekDays = [
-          { num: 23, curr: true, dname: "MONDAY", summary: "Spend Audit Reconcile" },
-          { num: 24, curr: true, dname: "TUESDAY", summary: "Project Checkout Cards" },
-          { num: 25, curr: true, dname: "WEDNESDAY", summary: "SQLite Compression Run" },
-          { num: 26, curr: true, dname: "THURSDAY", summary: "Thanksgiving (Idle)" },
-          { num: 27, curr: true, dname: "FRIDAY", summary: "TidyUP Maintenance" },
-          { num: 28, curr: true, dname: "SATURDAY", summary: "Cross-Harness Benchmark" },
-          { num: 29, curr: true, dname: "SUNDAY", summary: "End-of-Month Review" },
-        ];
-      } else {
-        weekLabel = "Week 49: Nov 30 – Dec 6, 2026";
-        weekDays = [
-          { num: 30, curr: true,  dname: "MONDAY", summary: "Cluster Seat & Schema Reset" },
-          { num: 1,  curr: false, dname: "TUESDAY", summary: "December Ledger Init" },
-          { num: 2,  curr: false, dname: "WEDNESDAY", summary: "Standby" },
-          { num: 3,  curr: false, dname: "THURSDAY", summary: "Standby" },
-          { num: 4,  curr: false, dname: "FRIDAY", summary: "Standby" },
-          { num: 5,  curr: false, dname: "SATURDAY", summary: "Standby" },
-          { num: 6,  curr: false, dname: "SUNDAY", summary: "Standby" },
-        ];
+      const focused = new Date(state.calendarYear, state.calendarMonth, state.focusedWeekDay || state.selectedCalendarDay || 1);
+      const focusedDay = focused.getDate();
+      const mondayOffset = (focused.getDay() + 6) % 7;
+      const start = new Date(focused.getFullYear(), focused.getMonth(), focused.getDate() - mondayOffset);
+      const names = ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"];
+      const weekDays = [];
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+        weekDays.push({
+          num: d.getDate(),
+          month: d.getMonth(),
+          year: d.getFullYear(),
+          curr: d.getMonth() === state.calendarMonth && d.getFullYear() === state.calendarYear,
+          dname: names[i]
+        });
       }
+      const weekLabel = monthShort(weekDays[0].month) + " " + weekDays[0].num + " – " + monthShort(weekDays[6].month) + " " + weekDays[6].num + ", " + weekDays[6].year;
 
       const columnsHtml = weekDays.map(wd => {
-        const isFocused = wd.curr && wd.num === focusedDay;
+        const isFocused = wd.year === focused.getFullYear() && wd.month === focused.getMonth() && wd.num === focused.getDate();
         const liveDay = wd.curr ? CALENDAR_DAYS_DATA[wd.num] : null;
         const dayData = liveDay || {
           num: wd.num, curr: wd.curr, today: false, heat: 0, cost: "—", hours: "—",
@@ -2759,7 +3151,7 @@
         `).join("");
 
         return `
-          <div onclick="selectCalendarDay(${wd.num}); state.focusedWeekDay = ${wd.num}; renderCalendarView();"
+          <div onclick="setCalendarDate(${wd.year}, ${wd.month}, ${wd.num})"
                class="flex-1 flex flex-col rounded-xl border ${colCls} p-3 gap-2.5 overflow-hidden transition-all cursor-pointer">
             <!-- Day Column Header -->
             <div class="flex flex-col gap-1 pb-2 border-b border-[#1C283E]">
@@ -2768,7 +3160,7 @@
                 ${isFocused ? '<span class="px-2 py-0.5 rounded bg-blue-600 text-[10px] font-bold text-white font-mono shadow-sm">★ FOCUSED DAY</span>' : ''}
               </div>
               <div class="flex items-baseline justify-between">
-                <span class="text-2xl font-bold font-mono ${wd.num === new Date().getDate() ? 'text-blue-400' : 'text-white'}">Nov ${wd.num}</span>
+                <span class="text-2xl font-bold font-mono ${(function(){ const t = new Date(); return wd.year === t.getFullYear() && wd.month === t.getMonth() && wd.num === t.getDate(); })() ? 'text-blue-400' : 'text-white'}">${monthShort(wd.month)} ${wd.num}</span>
                 <span class="text-xs font-mono font-bold text-cyan-300">${dayData.hours}</span>
               </div>
             </div>
@@ -2799,13 +3191,13 @@
                 <span>◀ Back to Month View</span>
               </button>
               <span class="text-sm font-bold text-white font-mono tracking-wide">${weekLabel}</span>
-              <span class="px-2 py-0.5 rounded bg-blue-900/60 border border-blue-500/60 text-blue-300 text-xs font-semibold">Special Focus: Nov ${focusedDay}</span>
+              <span class="px-2 py-0.5 rounded bg-blue-900/60 border border-blue-500/60 text-blue-300 text-xs font-semibold">Special Focus: ${monthShort(focused.getMonth())} ${focusedDay}</span>
             </div>
 
             <div class="flex items-center gap-2">
-              <button onclick="state.focusedWeekDay = Math.max(1, state.focusedWeekDay - 7); selectCalendarDay(state.focusedWeekDay); renderCalendarView();"
+              <button onclick="shiftWeek(-7)"
                       class="px-2.5 py-1 rounded bg-[#101726] border border-[#233552] text-xs text-white hover:bg-[#1A2538]">◀ Prev Week</button>
-              <button onclick="state.focusedWeekDay = Math.min(30, state.focusedWeekDay + 7); selectCalendarDay(state.focusedWeekDay); renderCalendarView();"
+              <button onclick="shiftWeek(7)"
                       class="px-2.5 py-1 rounded bg-[#101726] border border-[#233552] text-xs text-white hover:bg-[#1A2538]">Next Week ▶</button>
             </div>
           </div>
@@ -2818,12 +3210,34 @@
       `;
     }
 
+    function renderPlannerStrip() {
+      const goals = (state.goals || []).map(g => `
+        <label class="goal-row" data-goal-id="${escapeHtml(g.id)}">
+          <input type="checkbox" ${g.done ? "checked" : ""} onclick="toggleGoal('${escapeJs(g.id)}')" aria-label="${escapeHtml(g.text)}">
+          <span class="goal-text">${escapeHtml(g.text)}</span>
+        </label>
+      `).join("");
+      const triggers = (state.triggers || []).map(t => `
+        <div class="trigger-row" data-trigger-id="${escapeHtml(t.id)}">${escapeHtml(t.name || t.eventName || "Trigger")}</div>
+      `).join("");
+      return `
+        <div id="plannerStrip" class="planner-strip">
+          <div id="goalList">${goals}</div>
+          <input id="newGoalInput" type="text" placeholder="Add a goal" aria-label="New goal">
+          <button id="addGoalBtn" type="button" onclick="addGoalFromInput()">Add goal</button>
+          <div id="triggerList">${triggers}</div>
+        </div>
+      `;
+    }
+
     function renderCalendarView() {
       const pane = document.getElementById("calendarPane");
       if (!pane) return;
-
-      const activeDay = state.selectedCalendarDay || 8;
+      syncCalendarFromSessions();
+      clampCalendarDay();
+      const activeDay = state.selectedCalendarDay;
       const isMonth = state.calendarSubMode !== 'week';
+      const monthTitle = (MONTH_FULL[state.calendarMonth] || 'January').toUpperCase() + ' ' + state.calendarYear;
 
       // Left pane shows breakdown of time in hours with small model bullet icons for each major session of the day
       const leftPaneHtml = renderCalendarLeftPane(activeDay);
@@ -2831,14 +3245,15 @@
       const mainStageHtml = isMonth ? renderMonthGrid() : renderWeekView();
 
       pane.innerHTML = `
+        ${renderPlannerStrip()}
         <!-- TOP COMMAND & VIEW SWITCHER BAR -->
         <div class="h-10 shrink-0 px-3 flex items-center justify-between border-b border-[#243046] bg-[#080D15]">
           <!-- Left: Month Navigator & Sub-Mode Switcher -->
           <div class="flex items-center gap-2">
             <button onclick="prevCalendarDay()" class="px-2 py-0.5 rounded bg-[#101726] border border-[#243046] hover:bg-[#1A2538] text-xs text-white">◀</button>
-            <span class="text-sm font-bold text-white tracking-wide font-mono">NOVEMBER 2026</span>
+            <span class="text-sm font-bold text-white tracking-wide font-mono">${monthTitle}</span>
             <button onclick="nextCalendarDay()" class="px-2 py-0.5 rounded bg-[#101726] border border-[#243046] hover:bg-[#1A2538] text-xs text-white">▶</button>
-            <button onclick="selectCalendarDay(8); state.focusedWeekDay = 8; renderCalendarView(); flash('Jumped to Today: Nov 8, 2026')"
+            <button onclick="jumpToToday()"
                     class="ml-1 px-2.5 py-0.5 rounded bg-[#121D32] border border-[#2563EB] text-blue-400 text-xs font-semibold">Today</button>
 
             <!-- Mode Switcher: Month / Week -->
@@ -2847,7 +3262,7 @@
                       class="px-2.5 py-0.5 rounded-md text-xs font-semibold transition ${isMonth ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}">
                 📅 Month View
               </button>
-              <button onclick="openWeekView(state.selectedCalendarDay || 8)"
+              <button onclick="openWeekView(state.selectedCalendarDay)"
                       class="px-2.5 py-0.5 rounded-md text-xs font-semibold transition ${!isMonth ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'}">
                 📆 Week View
               </button>
@@ -2891,6 +3306,14 @@ function updateUI() {
       if (btnCal)  btnCal.className  = state.mainMode === 'calendar' ? activeIconBtnCls : idleIconBtnCls;
       if (btnProj) btnProj.className = state.mainMode === 'projects' ? activeIconBtnCls : idleIconBtnCls;
       if (btnSess) btnSess.className = state.mainMode === 'session'  ? activeBtnCls : idleBtnCls;
+      const resumeBtn = document.getElementById('toolbarResume');
+      if (resumeBtn) {
+        const blocked = selectedOverCeiling();
+        resumeBtn.disabled = blocked;
+        resumeBtn.title = blocked
+          ? 'Resume inhibited: 180k hard ceiling. Hand off instead.'
+          : 'Resume in Source Harness';
+      }
 
       const bcBadge = document.getElementById('tableBreadcrumbBadge');
       if (bcBadge) bcBadge.classList.toggle('hidden', state.mainMode === 'session');
@@ -2985,8 +3408,24 @@ function updateUI() {
       flash(`Showing session storage folder cards on ${driveId}`);
     }
 
-    function openDriveFolder(folderPath) {
-      flash(`Opened folder in File Explorer & filtered sessions: ${folderPath}`);
+    function pathIsKnown(folderPath) {
+      if (!folderPath) return false;
+      if (PLACE_PATHS.has(String(folderPath))) return true;
+      return (DRIVES || []).some(d => d && (d.id === folderPath || (d.folders || []).some(f => f && f.path === folderPath)));
+    }
+
+    async function openDriveFolder(folderPath) {
+      if (!pathIsKnown(folderPath)) {
+        flash('That folder is not in the places list.');
+        return;
+      }
+      try {
+        const res = await runApi('open_folder', { path: folderPath });
+        const name = (res && res.path) || 'folder';
+        flash(res && res.opened ? ('Opened ' + name) : ('Checked ' + name));
+      } catch (err) {
+        flash('Open folder: ' + (err && err.message ? err.message : 'failed'));
+      }
     }
 
     function toggleMakerMenu() {
@@ -3024,11 +3463,26 @@ function updateUI() {
 
     function addTagToSelected() {
       const s = SESSIONS.find(x => x.id === state.selectedId);
-      if (s) {
-        s.tag3 = '#custom';
-        updateUI();
-        flash(`Updated Tag 3 on "${s.title}" → #custom`);
+      if (!s) {
+        flash('Select a session before adding a tag');
+        return;
       }
+      const box = document.getElementById('tagInline');
+      let raw = box && String(box.value || '').trim();
+      if (!raw) {
+        const current = (s.tag3 && s.tag3 !== '#custom') ? s.tag3 : '#';
+        raw = window.prompt('Tag name', current);
+      }
+      if (raw == null) return;
+      let tag = String(raw).trim();
+      if (!tag) return;
+      if (tag.charAt(0) !== '#') tag = '#' + tag;
+      tag = tag.replace(/\s+/g, '').slice(0, 32);
+      s.tag3 = tag;
+      saveAnnotation(s.id, { tag3: tag });
+      if (box) box.value = '';
+      updateUI();
+      flash(`Updated Tag 3 on "${s.title}" → ${tag}`);
     }
 
     function toggleProjectSelect(proj) {
@@ -3050,7 +3504,11 @@ function updateUI() {
     }
 
     function expandAllProjects(open) {
-      state.expandedProjects = open ? new Set(['cmSessions', 'harness_repo', 'COSMOS', 'TokenCenter']) : new Set();
+      if (!open) {
+        state.expandedProjects = new Set();
+      } else {
+        state.expandedProjects = new Set(SESSIONS.map(s => s.proj).filter(Boolean));
+      }
       updateUI();
     }
 
@@ -3081,7 +3539,45 @@ function updateUI() {
 
     function onSearch(val) {
       state.query = val || '';
+      state.page = 1;
       updateUI();
+    }
+
+    function handoffOptionLabel(base, harness) {
+      if (!MDATA_AXES || !harness) return base;
+      const bits = [];
+      ['coding', 'agentic', 'long_context'].forEach(axis => {
+        const bucket = MDATA_AXES[axis];
+        const row = bucket && (bucket[harness] || bucket[harness === 'gemini' ? 'agy' : harness]);
+        if (!row || typeof row !== 'object') return;
+        const name = row.name || row.dossier_id || '';
+        if (name) bits.push(String(name));
+      });
+      if (!bits.length) return base;
+      return base + ' · ' + bits.slice(0, 2).join(' / ');
+    }
+
+    function handoffOptionsHtml() {
+      const options = [
+        ['gemini', 'Antigravity · Gemini 4 Argon'],
+        ['claude', 'Claude Code · Claude Opus 4.6'],
+        ['codex', 'Codex · GPT-5.1 Codex'],
+        ['grok', 'Grok.exe · Grok 4.7'],
+        ['hermes', 'Hermes · Hermes Agent']
+      ];
+      return options.map(([harness, label]) => {
+        return '<option value="' + escapeHtml(label) + '">' + escapeHtml(handoffOptionLabel(label, harness)) + '</option>';
+      }).join('');
+    }
+
+    async function loadMdataLabels() {
+      try {
+        const res = await runApi('mdata_status', { refresh: false });
+        if (res && res.axes && typeof res.axes === 'object') MDATA_AXES = res.axes;
+      } catch (e) {
+        MDATA_AXES = null;
+      }
+      if (state.mainMode === 'session') renderSessionView();
     }
 
     function openSelectedInTab() {
@@ -3203,12 +3699,25 @@ function updateUI() {
 
     window.addEventListener('resize', applyDesktopScale);
     document.addEventListener('fullscreenchange', applyDesktopScale);
+    window.addEventListener('storage', (ev) => {
+      if (ev.key && ev.key !== 'cmSessions.settings') return;
+      applyUiSettings(readUiSettings());
+      state.page = 1;
+      updateUI();
+    });
+    window.addEventListener('cmSessions:settings', () => {
+      applyUiSettings(readUiSettings());
+      state.page = 1;
+      updateUI();
+    });
+    applyUiSettings(readUiSettings());
+    loadPlannerState();
     applyDesktopScale();
-    updateUI();
-    loadLiveSessions(false);
-  
+
     // =========================================================================
     // DYNAMIC DRAGGABLE COLUMN RESIZING ENGINE
+    // Column widths have to exist before the first updateUI(); that call
+    // paints the grid and would otherwise hit the let/const dead zone.
     // =========================================================================
     const defaultColWidths = {
       topics: 180,
@@ -3304,7 +3813,9 @@ function updateUI() {
       flash(`Reset "${colKey}" column width to default (${colWidths[colKey]}px)`);
     }
 
-    // Call updateGridTemplate in toggleColumn
+    updateUI();
+    loadLiveSessions(false);
+    loadMdataLabels();
 
 </script>
 

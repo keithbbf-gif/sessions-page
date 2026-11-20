@@ -2,6 +2,7 @@
 from pathlib import Path
 block_cipher = None
 
+# Every file in ui/ except *.bak, including solaro-account.js, tokens.json, and manifest.json.
 ui_datas = []
 for p in Path("ui").glob("*"):
     if p.is_file() and not p.name.endswith(".bak"):
@@ -16,11 +17,16 @@ desk_modules = [
     "session_chain", "session_keywords", "session_text", "session_preview",
     "session_actions", "session_face", "cal_days", "cal_loose", "cal_month",
     "cal_plans", "cal_priorities", "cal_search",
+    "csm_core.errors", "csm_core.error_handlers", "csm_core.tokenctr_bridge",
+    "csm_core.tokenctr_types", "csm_core.persist", "csm_core.cosmos_pointer",
+    "solaro_core", "solaro_core.account", "solaro_core.mdata",
+    "solaro_core.tokenctr", "solaro_core.tokenctr_types",
+    "solaro_core.solarolabs", "solaro_core.ui_cache",
 ]
 
 a = Analysis(
     ["sessions_page.py"],
-    pathex=[],
+    pathex=[p for p in [r"V:\a\ai\solaro_core"] if Path(p).is_dir()],
     binaries=[],
     datas=ui_datas,
     hiddenimports=desk_modules,

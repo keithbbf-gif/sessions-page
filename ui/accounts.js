@@ -222,6 +222,12 @@
     showReady(rec);
   }
 
+  function cmToken() {
+    var meta = document.querySelector('meta[name="cm-token"]');
+    if (!meta) return "";
+    return meta.getAttribute("content") || "";
+  }
+
   function requestAccountStatus() {
     var mine = ++generation;
     setMode("loading");
@@ -229,9 +235,12 @@
     if (typeof fetch !== "function") {
       pending = Promise.resolve(window.cmAccountStatus());
     } else {
+      var headers = { "Content-Type": "application/json" };
+      var token = cmToken();
+      if (token) headers["X-CM-Token"] = token;
       pending = fetch("/api/run", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: headers,
         body: JSON.stringify({ action: "account_status", verb: "account_status" })
       }).then(function (res) {
         return res.json().then(function (rec) {

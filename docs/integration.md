@@ -2,9 +2,9 @@
 
 One engine, three shells. Do not fork the session code.
 
-1. Standalone app first. The product is the native desk window, `CM Sessions.exe`. It finds, reads, and resumes local sessions with no Cosmos, no cDeck, and no browser. It does not bind a port.
-2. Integral to COSMOS. When Cosmos is installed, the same engine is called in-process. Cosmos is the body. cmSessions is not the body.
-3. A plugin for Cosmos Code. Cosmos Code is a launch target and a host. The hook is `cosmos_code_hook.py`. It does not copy the engine into the Cosmos Code tree.
+1. Standalone app first. The packaged app is `sessions_page.exe` with no arguments, or the `serve` command. It runs the loopback web sheet on `127.0.0.1`, scanning ports 8786–8795 on a double-click and staying on the named port for `serve`. It finds, reads, and resumes local sessions with no Cosmos and no cDeck, and it opens Edge app mode or the default browser. That start is not the zero-port Tk desk.
+2. Integral to COSMOS. When Cosmos is installed, the same engine is called in-process. Cosmos is the body. cmSessions is not the body. The in-process kits (`cosmos_session_tools_kit.py`, `plugin_api.py`) and `sessions_page desk` run with `port: null`.
+3. A plugin for Cosmos Code. Cosmos Code is a launch target and a host. The cmCode plugin loader is `cosmos_code/plugins.py`, which loads `cosmos_code_hook.py`. It does not copy the engine into the Cosmos Code tree.
 
 COSMOS already loads this engine. Do not edit `cosmos_service.py`, `app.js`, or `header.js`.
 
@@ -28,6 +28,6 @@ The next step is a button that calls `kit.run`. That button is not in this build
 
 The snapshot descriptor in `E:\Cosmos_code_repo\2026-09-30_v2_product_engine\product_cosmos_code\plugins.py` now has the entrypoint `V:\a\ai\COSMOS\builds\sessions-page\cosmos_code_hook.py:descriptor`. The builtin named `sessions` stays registered. `via` is in-process. `port` is null. `window` is `desk`. `writes_live` stays false. The verbs are find, load, resume, and formats ([cosmos_code_hook.py](../cosmos_code_hook.py) `cosmos_code_hook.descriptor`). Scope stays `core/sessions`. The hook does not open a port, it does not start a process, and it does not write `live\`.
 
-`V:\a\ai\COSMOS\cosmos_code` still has no `plugins.py`, so the running Cosmos Code package does not load this descriptor until that snapshot is the package.
+The cmCode loader is `cosmos_code/plugins.py` (`V:\a\ai\COSMOS\cosmos_code\plugins.py`, and the same file in the cmCode tree). `load_sessions_plugin` imports this folder's `cosmos_code_hook.py` and calls `descriptor`, then `open_plugin`. That hook stays in-process. `port` is null. `window` is `desk`. It does not open a port, it does not start a process, and it does not write `live\`.
 
-The deck script `plugin/deck_sessions_page.js` is only the old page. It still talks to `127.0.0.1:8786` when someone started `serve` ([plugin/deck_sessions_page.js](../plugin/deck_sessions_page.js) `HOST`; [sessions_page.py](../sessions_page.py) `sessions_page._serve`, `sessions_page.main`). The installed app is the desk window and does not need that port.
+The deck script `plugin/deck_sessions_page.js` still targets `127.0.0.1:8786` ([plugin/deck_sessions_page.js](../plugin/deck_sessions_page.js) `HOST`; [sessions_page.py](../sessions_page.py) `sessions_page._serve`, `sessions_page.main`). That is the loopback sheet from `serve` or from the packaged app when it bound 8786. The packaged app is that sheet. `sessions_page desk` is the zero-port Tk window.

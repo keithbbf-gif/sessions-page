@@ -29,9 +29,38 @@ RestartApplications=no
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[Tasks]
+Name: "install_cmcode"; Description: "Install cmCode AI harness dependency (recommended for AI access)"; GroupDescription: "Dependencies:"; Flags: checkedonce
+
 [Files]
 Source: "V:\a\ai\COSMOS\builds\sessions-page\dist\sessions_page.exe"; DestDir: "{app}"; DestName: "sessions_page.exe"; Flags: ignoreversion
+Source: "V:\a\ai\COSMOS\builds\sessions-page\install\windows\install_cmcode_dep.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\cmSessions"; Filename: "{app}\sessions_page.exe"; WorkingDir: "{app}"
 Name: "{userdesktop}\cmSessions"; Filename: "{app}\sessions_page.exe"; WorkingDir: "{app}"
+
+; sessions_page.exe is not launched. The cmCode step is a separate binary install.
+[Run]
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install_cmcode_dep.ps1"""; Tasks: install_cmcode; Check: not IsCmCodeInstalled; Flags: runhidden waituntilterminated
+
+[Code]
+function IsCmCodeInstalled(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result :=
+    FileExists(ExpandConstant('{localappdata}\Programs\cmCode\cmcode.cmd')) or
+    FileExists(ExpandConstant('{localappdata}\Programs\cmCode\pyproject.toml')) or
+    FileExists(ExpandConstant('{localappdata}\Programs\COSMOS\cmCode\cmcode.cmd')) or
+    FileExists(ExpandConstant('{localappdata}\Programs\COSMOS\cmCode\pyproject.toml'));
+  if Result then
+    Exit;
+  if Exec(ExpandConstant('{sys}\where.exe'), 'cmcode', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then
+  begin
+    Result := True;
+    Exit;
+  end;
+  if Exec(ExpandConstant('{sys}\where.exe'), 'cosmos-code', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then
+    Result := True;
+end;

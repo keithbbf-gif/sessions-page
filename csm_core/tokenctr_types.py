@@ -75,6 +75,7 @@ BRIDGE_UNAVAILABLE_REASONS: frozenset[str] = frozenset({
     "too_large",
     "bad_json",
     "bad_payload",
+    "auth_required",
 })
 
 # Public keys of csm_core.tokenctr_bridge.account_status. No email field.
@@ -856,6 +857,13 @@ def account_status_view(
         }
     status = _view_status(report.get("status"))
     reason = _view_reason(report.get("reason"))
+    raw_reason = report.get("reason")
+    if (
+        reason is None
+        and isinstance(raw_reason, str)
+        and raw_reason.strip() in BRIDGE_UNAVAILABLE_REASONS
+    ):
+        reason = raw_reason.strip()
     if status == "unavailable" and reason is None:
         reason = "bad_payload"
     sources = _view_sources(report)
