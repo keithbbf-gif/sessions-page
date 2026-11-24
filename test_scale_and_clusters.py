@@ -15,6 +15,7 @@ import sys
 import time
 import json
 import shutil
+import secrets
 import tempfile
 from pathlib import Path
 
@@ -262,7 +263,7 @@ def case_append_only_write_file() -> None:
 
 def case_durability_triumvirate() -> None:
     """Verifies TidyUP compaction, TidyUP2 adversarial porosity audit, and BootUP HMAC verification."""
-    session_key = b"secret-cosmos-session-key-32bytes!!"
+    session_key = secrets.token_bytes(32)
 
     # 1. TidyUP: Compact active state to SEED
     seed = csm_core.DurabilityTriumvirate.tidy_up(
@@ -306,7 +307,7 @@ def case_durability_triumvirate() -> None:
         raise AssertionError("BootUP valid check failed")
 
     # Tampered key or tampered length must fail closed
-    bad_key = b"wrong-key-000000000000000000000000"
+    bad_key = secrets.token_bytes(32)
     try:
         csm_core.DurabilityTriumvirate.boot_up(seed, bad_key)
         raise AssertionError("BootUP should have failed with wrong HMAC key")
