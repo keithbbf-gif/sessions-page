@@ -1,6 +1,6 @@
-# cmSessions — Developer & Troubleshooting Onboarding Guide for Jack
+# cmSessions — Developer & Troubleshooting Onboarding Guide for the developer
 
-Welcome to **cmSessions**, Jack! This document gets you up and running immediately on your PC so you can troubleshoot, polish the UI, and push updates using Antigravity.
+Welcome to **cmSessions**, the developer! This document gets you up and running immediately locally so you can troubleshoot, polish the UI, and push updates using Antigravity.
 
 ---
 
@@ -14,10 +14,10 @@ Local CPU/RAM is free, model tokens are expensive. Zero tokens are spent on mech
 
 ---
 
-## 2. Getting Started on Your PC
+## 2. Getting Started locally
 
 ### Step A: Clone the Repository
-Open PowerShell or your terminal on your PC:
+Open PowerShell or your terminal locally:
 ```powershell
 git clone https://github.com/keithbbf-gif/sessions-page.git
 cd sessions-page
@@ -106,8 +106,8 @@ The binary is `dist_desk\sessions_page.exe`. With no arguments it opens the Full
 
 ## 6. Antigravity & Multi-Agent Architecture
 
-When using Antigravity on your PC:
-* Use the **G4Argon Orchestrator** pattern documented in `w:\db\NA+kees.md`.
+When using Antigravity locally:
+* Use the **G4Argon Orchestrator** pattern documented in the project's orchestration guidance.
 * Antigravity coordinates high-level tasks and delegates parallel coding/testing to subagents (`EnableSubagentTools: true`, `EnableWriteTools: true`).
 * Commit and push your changes back to `keithbbf-gif/sessions-page`:
   ```powershell
@@ -116,4 +116,4 @@ When using Antigravity on your PC:
   git push origin main
   ```
 
-Have fun building, Jack!
+Happy building!
